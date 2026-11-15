@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Baron Pit Dr. Mundo 1v1 — League of Legends Dodgeball</title>
+  <link rel="icon" type="image/png" href="/assets/icons/drmundo_circle.png" />
+  <link rel="stylesheet" href="/styles.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/three/build/three.module.js",
+        "three/addons/": "/three/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <!-- 3D WebGL Summoner's Rift Baron Pit Canvas -->
+  <div id="game-canvas-container"></div>
+
+  <!-- In-World Floating League Health Bars & Combat Text -->
+  <div id="world-ui-layer">
+    <div id="fhb-0" class="lol-floating-bar self" style="display: none;">
+      <div class="fhb-status-row" id="fhb-status-0"></div>
+      <div class="fhb-name" id="fhb-name-0">Blue Mundo</div>
+      <div class="fhb-main-frame">
+        <div class="fhb-level-box">9</div>
+        <div class="fhb-bars-col">
+          <div class="fhb-hp-track">
+            <div class="fhb-hp-trail" id="fhb-trail-0" style="width: 100%;"></div>
+            <div class="fhb-hp-fill" id="fhb-fill-0" style="width: 100%;"></div>
+            <div class="fhb-hp-ticks"></div>
+          </div>
+          <div class="fhb-sub-track">
+            <div class="fhb-sub-fill"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="fhb-1" class="lol-floating-bar enemy" style="display: none;">
+      <div class="fhb-status-row" id="fhb-status-1"></div>
+      <div class="fhb-name" id="fhb-name-1">Red Mundo</div>
+      <div class="fhb-main-frame">
+        <div class="fhb-level-box">9</div>
+        <div class="fhb-bars-col">
+          <div class="fhb-hp-track">
+            <div class="fhb-hp-trail" id="fhb-trail-1" style="width: 100%;"></div>
+            <div class="fhb-hp-fill" id="fhb-fill-1" style="width: 100%;"></div>
+            <div class="fhb-hp-ticks"></div>
+          </div>
+          <div class="fhb-sub-track">
+            <div class="fhb-sub-fill"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="combat-text-layer"></div>
+  </div>
+
+  <!-- Center Announcer Overlay -->
+  <div id="announcer-banner" class="hidden">
+    <div class="announcer-title" id="announcer-title">ROUND 1</div>
+    <div class="announcer-sub" id="announcer-sub">PREPARE YOUR BONESAWS</div>
+  </div>
+
+  <!-- Hextech Client Overlay (Home & Room Lobby) -->
+  <div id="lobby-overlay">
+    <div class="hextech-shell">
+      <div class="hextech-header">
+        <div class="brand-group">
+          <img class="brand-avatar" src="/assets/icons/drmundo_circle.png" alt="Dr. Mundo" />
+          <div class="brand-titles">
+            <h1>Baron Pit Dr. Mundo 1v1</h1>
+            <p>Summoner's Rift Baron Pit • Classic Mundo Dodgeball (Q Only • Ward Dividing Line)</p>
+          </div>
+        </div>
+        <div class="header-badges">
+          <span class="hex-badge teal" id="model-load-status">Loading 3D Assets...</span>
+          <button class="hex-btn sm" id="btn-mute-audio" type="button">Sound: ON</button>
+        </div>
+      </div>
+
+      <!-- HOME VIEW: Create Room / Join Room / Select Summoner Spells -->
+      <div id="home-view" class="view-panel">
+        <div class="home-grid">
+          <!-- Left Column: Create Room + Summoner Spells -->
+          <div class="hex-card">
+            <h2>1. Create Baron Pit 1v1 Room</h2>
+            <div class="field-row">
+              <div class="field-group">
+                <label for="input-player-name">Summoner Name</label>
+                <input id="input-player-name" class="hex-input" type="text" maxlength="18" value="Dr. Mundo" placeholder="Enter Summoner Name" />
+              </div>
+              <div class="field-group">
+                <label for="input-create-passcode">Room Passcode (Optional)</label>
+                <input id="input-create-passcode" class="hex-input" type="text" maxlength="16" placeholder="e.g. 1234 (or leave blank)" />
+              </div>
+            </div>
+
+            <div class="field-row">
+              <div class="field-group">
+                <label for="select-best-of">Match Series</label>
+                <select id="select-best-of" class="hex-select">
+                  <option value="3" selected>Best of 3 Rounds</option>
+                  <option value="5">Best of 5 Rounds</option>
+                  <option value="1">Single Round (1v1)</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label for="select-cd-mode">Summoner Spell Cooldowns</label>
+                <select id="select-cd-mode" class="hex-select">
+                  <option value="fast" selected>Dodgeball Fast (25s–30s)</option>
+                  <option value="standard">Standard League (120s)</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Summoner Spells Selector (Flash, Heal, Ghost) -->
+            <div class="spell-picker-section">
+              <div class="spell-picker-header">
+                <span>Select Summoner Spells (D &amp; F)</span>
+                <small>Click to assign D / F (click equipped to swap)</small>
+              </div>
+              <div class="spell-picker-row" id="home-spell-picker">
+                <div class="spell-option-card clickable selected-d" data-spell="flash">
+                  <img src="/assets/icons/summoner_flash.png" alt="Flash" />
+                  <div class="spell-option-info">
+                    <strong>Flash</strong>
+                    <span>Blink toward cursor</span>
+                  </div>
+                  <div class="spell-key-badge">D</div>
+                </div>
+                <div class="spell-option-card clickable selected-f" data-spell="ghost">
+                  <img src="/assets/icons/summoner_ghost.png" alt="Ghost" />
+                  <div class="spell-option-info">
+                    <strong>Ghost</strong>
+                    <span>+38% Move Speed (7s)</span>
+                  </div>
+                  <div class="spell-key-badge">F</div>
+                </div>
+                <div class="spell-option-card clickable" data-spell="heal">
+                  <img src="/assets/icons/summoner_heal.png" alt="Heal" />
+                  <div class="spell-option-info">
+                    <strong>Heal</strong>
+                    <span>Restore 260 HP + MS</span>
+                  </div>
+                  <div class="spell-key-badge" style="display:none;"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="btn-row">
+              <button id="btn-create-room" class="hex-btn gold-cta" type="button">Create Room &amp; Get Link</button>
+              <button id="btn-practice-bot" class="hex-btn primary" type="button">Instant 1v1 vs Bot</button>
+            </div>
+          </div>
+
+          <!-- Right Column: Join Room via Shareable Link / Code & Passcode -->
+          <div class="hex-card">
+            <h2>2. Join Room with Code &amp; Passcode</h2>
+            <div class="field-row">
+              <div class="field-group">
+                <label for="input-join-code">Room Code</label>
+                <input id="input-join-code" class="hex-input" type="text" maxlength="12" placeholder="e.g. MUNDO1" style="text-transform: uppercase;" />
+              </div>
+              <div class="field-group">
+                <label for="input-join-passcode">Room Passcode</label>
+                <input id="input-join-passcode" class="hex-input" type="password" maxlength="16" placeholder="Enter passcode if locked" />
+              </div>
+            </div>
+
+            <button id="btn-join-room" class="hex-btn primary" type="button">Join Baron Pit Room</button>
+
+            <div class="field-group" style="margin-top: 6px;">
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <label>Active Baron Pit Rooms</label>
+                <button id="btn-refresh-rooms" class="hex-btn sm" type="button" style="padding: 3px 9px; font-size: 10px;">Refresh</button>
+              </div>
+              <div id="active-rooms-list" class="rooms-list">
+                <div class="room-list-item">
+                  <div class="room-list-meta">
+                    <strong>No active rooms yet</strong>
+                    <small>Create a room on the left to generate a shareable link!</small>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="spell-picker-section" style="margin-top: auto;">
+              <div class="spell-picker-header" style="margin-bottom: 4px;">
+                <span>Classic Mundo Dodgeball Rules</span>
+              </div>
+              <p style="font-size: 12px; color: #a09b8c; line-height: 1.45;">
+                • <b>Baron Pit Arena:</b> Divided down the center by a line of Control &amp; Stealth Wards.<br/>
+                • <b>Infected Bonesaw (Q):</b> Costs 50 HP, deals 22% current HP (min 215), slows by 40%, and refunds 100% HP on hit.<br/>
+                • <b>Summoner Spells:</b> Outplay with <b>Flash</b>, <b>Heal</b>, and <b>Ghost</b> on <b>D</b> &amp; <b>F</b>.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ROOM LOBBY VIEW: Shareable Link, Passcode, Player Slots, Summoner Spell Loadout -->
+      <div id="room-view" class="view-panel hidden">
+        <div class="room-share-banner">
+          <div class="share-metrics">
+            <div class="share-pill">
+              <label>Room Code</label>
+              <strong id="lobby-room-code">------</strong>
+            </div>
+            <div class="share-pill">
+              <label>Room Passcode</label>
+              <strong id="lobby-room-passcode">OPEN</strong>
+            </div>
+            <div class="share-pill">
+              <label>Shareable Invite URL</label>
+              <strong id="lobby-share-url" style="font-size: 13px; color: #0ac8b9; font-family: 'Spiegel', sans-serif; letter-spacing: 0.2px;">https://...</strong>
+            </div>
+          </div>
+          <div class="share-actions">
+            <button id="btn-copy-share-link" class="hex-btn primary sm" type="button">Copy Shareable Link</button>
+            <button id="btn-copy-code-pass" class="hex-btn sm" type="button">Copy Code + Passcode</button>
+          </div>
+        </div>
+
+        <div class="lobby-vs-grid">
+          <!-- Blue Side Slot 0 -->
+          <div class="player-slot-card blue-side">
+            <div class="slot-top">
+              <div class="slot-portrait">
+                <img src="/assets/icons/drmundo_square.png" alt="Blue Dr. Mundo" />
+              </div>
+              <div>
+                <div class="slot-team-tag">Blue Side • Upper-Left Pit</div>
+                <div class="slot-player-name" id="slot-0-name">Waiting...</div>
+                <div class="slot-champ-sub">Dr. Mundo — The Madman of Zaun</div>
+              </div>
+            </div>
+            <div class="slot-spells-display">
+              <span style="font-family:'BeaufortForLoL',serif; font-size:11px; color:#a09b8c; text-transform:uppercase;">Summoner Spells</span>
+              <div class="equipped-pair" id="slot-0-spells"></div>
+            </div>
+          </div>
+
+          <div class="vs-divider">VS</div>
+
+          <!-- Red Side Slot 1 -->
+          <div class="player-slot-card red-side">
+            <div class="slot-top">
+              <div class="slot-portrait">
+                <img src="/assets/icons/drmundo_square.png" alt="Red Dr. Mundo" />
+              </div>
+              <div style="flex:1;">
+                <div class="slot-team-tag">Red Side • Lower-Right Pit</div>
+                <div class="slot-player-name" id="slot-1-name">Waiting for Opponent...</div>
+                <div class="slot-champ-sub" id="slot-1-sub">Share room link or add AI Bot</div>
+              </div>
+              <button id="btn-toggle-bot" class="hex-btn sm" type="button">+ Add AI Bot</button>
+            </div>
+            <div class="slot-spells-display">
+              <span style="font-family:'BeaufortForLoL',serif; font-size:11px; color:#a09b8c; text-transform:uppercase;">Summoner Spells</span>
+              <div class="equipped-pair" id="slot-1-spells"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Lobby Summoner Spell Picker -->
+        <div class="spell-picker-section" style="margin-bottom: 16px;">
+          <div class="spell-picker-header">
+            <span>Your Summoner Spells Loadout (Keys: D &amp; F)</span>
+            <small>Select any 2 of Flash, Heal, Ghost — click an active spell to swap D &amp; F</small>
+          </div>
+          <div class="spell-picker-row" id="lobby-spell-picker">
+            <div class="spell-option-card clickable selected-d" data-spell="flash">
+              <img src="/assets/icons/summoner_flash.png" alt="Flash" />
+              <div class="spell-option-info">
+                <strong>Flash</strong>
+                <span>Instant blink (425 range) toward cursor</span>
+              </div>
+              <div class="spell-key-badge">D</div>
+            </div>
+            <div class="spell-option-card clickable selected-f" data-spell="ghost">
+              <img src="/assets/icons/summoner_ghost.png" alt="Ghost" />
+              <div class="spell-option-info">
+                <strong>Ghost</strong>
+                <span>+38% Movement Speed for 7.0s</span>
+              </div>
+              <div class="spell-key-badge">F</div>
+            </div>
+            <div class="spell-option-card clickable" data-spell="heal">
+              <img src="/assets/icons/summoner_heal.png" alt="Heal" />
+              <div class="spell-option-info">
+                <strong>Heal</strong>
+                <span>Restore 260 HP + 30% MS burst (1.5s)</span>
+              </div>
+              <div class="spell-key-badge" style="display:none;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="lobby-footer-bar">
+          <button id="btn-leave-room" class="hex-btn" type="button">Leave Room</button>
+          <div style="display:flex; align-items:center; gap: 12px;">
+            <span id="lobby-status-hint" style="font-size: 13px; color: #c8aa6e;">Ready to enter Baron Pit!</span>
+            <button id="btn-start-match" class="hex-btn gold-cta" type="button">Start Baron Pit 1v1</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- In-Game League of Legends HUD -->
+  <div id="ingame-hud" class="hidden">
+    <!-- Top Scoreboard -->
+    <div class="top-hud-bar">
+      <div class="score-side blue">
+        <span class="score-side-name" id="hud-blue-name">Blue Mundo</span>
+        <span class="score-value" id="hud-blue-score">0</span>
+      </div>
+      <div class="round-badge">
+        <strong id="hud-round-label">ROUND 1</strong>
+        <small id="hud-accuracy-label">Cleaver Acc: 0%</small>
+      </div>
+      <div class="score-side red">
+        <span class="score-value" id="hud-red-score">0</span>
+        <span class="score-side-name" id="hud-red-name">Red Mundo</span>
+      </div>
+    </div>
+
+    <!-- Top-Right Room Invite & Lobby Button -->
+    <div class="top-right-room-bar">
+      <span id="hud-room-code-label">ROOM: ------</span>
+      <button id="btn-hud-copy-link" class="hex-btn sm" type="button" style="padding: 4px 10px; font-size: 11px;">Copy Invite Link</button>
+      <button id="btn-hud-lobby" class="hex-btn sm" type="button" style="padding: 4px 10px; font-size: 11px;">Lobby</button>
+    </div>
+
+    <!-- Bottom-Left Controls Legend -->
+    <div class="controls-hint-box">
+      <div><b>Right-Click</b> Move in Baron Pit</div>
+      <div><b>Q</b> Cast Infected Bonesaw (Skillshot)</div>
+      <div><b>D / F</b> Cast Summoner Spells (Flash / Heal / Ghost)</div>
+      <div><b>S</b> Stop Movement • <b>Space / Y</b> Camera Lock</div>
+      <div><b>1 / 2 / 3 / 4</b> Taunt / Joke / Dance / Laugh</div>
+    </div>
+
+    <!-- Bottom-Center League of Legends Champion HUD -->
+    <div class="bottom-lol-hud">
+      <div class="hud-champ-cluster">
+        <div class="hud-portrait-wrap">
+          <img src="/assets/icons/drmundo_circle.png" alt="Dr. Mundo" />
+          <div class="hud-level-diamond">9</div>
+        </div>
+        <div class="hud-stats-box">
+          <span>AD <b>118</b></span>
+          <span>ARM <b>76</b></span>
+          <span>MR <b>58</b></span>
+          <span>MS <b id="hud-stat-ms">385</b></span>
+          <span>REGEN <b>16/s</b></span>
+          <span>HIT <b id="hud-stat-hits">0</b></span>
+        </div>
+      </div>
+
+      <div class="hud-center-col">
+        <div class="hud-abilities-row">
+          <!-- Passive -->
+          <div class="ability-slot passive-slot" title="Passive: Goes Where He Pleases (Health Regeneration)">
+            <img src="/assets/icons/drmundo_p.png" alt="Passive" />
+            <div class="ability-key">P</div>
+          </div>
+
+          <!-- Q: Infected Bonesaw -->
+          <div class="ability-slot clickable" id="hud-slot-q" title="Infected Bonesaw (Q): Hurl cleaver toward cursor">
+            <img src="/assets/icons/drmundo_q.png" alt="Infected Bonesaw" />
+            <div class="ability-cost-tag">50 HP</div>
+            <div class="cd-overlay hidden" id="hud-cd-q">0.0</div>
+            <div class="ability-key">Q</div>
+          </div>
+
+          <!-- W / E / R (Disabled in Classic Mundo Dodgeball) -->
+          <div class="ability-slot disabled-dodgeball" title="Heart Zapper (W) — Disabled in Classic Mundo Dodgeball">
+            <img src="/assets/icons/drmundo_w.png" alt="W" />
+            <div class="ability-key">W</div>
+          </div>
+          <div class="ability-slot disabled-dodgeball" title="Blunt Force Trauma (E) — Disabled in Classic Mundo Dodgeball">
+            <img src="/assets/icons/drmundo_e.png" alt="E" />
+            <div class="ability-key">E</div>
+          </div>
+          <div class="ability-slot disabled-dodgeball" title="Maximum Dosage (R) — Disabled in Classic Mundo Dodgeball">
+            <img src="/assets/icons/drmundo_r.png" alt="R" />
+            <div class="ability-key">R</div>
+          </div>
+
+          <!-- Summoner Spell D -->
+          <div class="ability-slot summoner-slot SummonerGroup clickable" id="hud-slot-d" title="Summoner Spell [D]">
+            <img id="hud-img-d" src="/assets/icons/summoner_flash.png" alt="Spell D" />
+            <div class="cd-overlay hidden" id="hud-cd-d">0</div>
+            <div class="ability-key">D</div>
+          </div>
+
+          <!-- Summoner Spell F -->
+          <div class="ability-slot summoner-slot clickable" id="hud-slot-f" title="Summoner Spell [F]">
+            <img id="hud-img-f" src="/assets/icons/summoner_ghost.png" alt="Spell F" />
+            <div class="cd-overlay hidden" id="hud-cd-f">0</div>
+            <div class="ability-key">F</div>
+          </div>
+        </div>
+
+        <div class="hud-bars-stack">
+          <div class="hud-bar-outer">
+            <div class="hud-hp-fill" id="hud-hp-bar-fill"></div>
+            <div class="hud-bar-text" id="hud-hp-bar-text">1850 / 1850 (+16.0/s)</div>
+          </div>
+          <div class="hud-bar-outer resource">
+            <div class="hud-res-fill"></div>
+            <div class="hud-bar-text" style="font-size: 9px;">MUNDO DODGEBALL • INFECTED BONESAW REFUNDS 100% HP ON HIT</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom-Right Summoner's Rift Minimap -->
+    <div class="minimap-frame" title="Summoner's Rift — Baron Pit">
+      <img class="map-bg" src="/assets/map/minimap.png" alt="Minimap" />
+      <div class="minimap-pit-ring"></div>
+      <div class="minimap-dot blue" id="minimap-dot-0" style="left: 44%; top: 44%;"></div>
+      <div class="minimap-dot red" id="minimap-dot-1" style="left: 56%; top: 56%;"></div>
+    </div>
+  </div>
+
+  <!-- Post-Match Victory / Defeat Modal -->
+  <div id="gameover-modal" class="hidden">
+    <div class="gameover-card">
+      <h2 id="gameover-title" class="victory">VICTORY</h2>
+      <p id="gameover-subtitle" style="font-size: 15px; color: #f0e6d2;">Dr. Mundo goes where he pleases!</p>
+      <div id="gameover-stats" style="background: rgba(1,10,19,0.8); border: 1px solid rgba(200,170,110,0.3); padding: 12px; font-size: 13px; color: #a09b8c; line-height: 1.6;"></div>
+      <div class="btn-row">
+        <button id="btn-rematch" class="hex-btn gold-cta" type="button">Play Again (Rematch)</button>
+        <button id="btn-back-lobby" class="hex-btn primary" type="button">Return to Room Lobby</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notifications -->
+  <div id="toast-container"></div>
+
+  <script type="module" src="/game.js"></script>
+</body>
+</html>

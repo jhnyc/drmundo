@@ -1,0 +1,1394 @@
+@font-face {
+  font-family: 'BeaufortForLoL';
+  src: url('/assets/fonts/beaufort-regular.otf') format('opentype');
+  font-weight: 400;
+}
+@font-face {
+  font-family: 'BeaufortForLoL';
+  src: url('/assets/fonts/beaufort-bold.otf') format('opentype');
+  font-weight: 700;
+}
+@font-face {
+  font-family: 'BeaufortForLoL';
+  src: url('/assets/fonts/beaufort-heavy.otf') format('opentype');
+  font-weight: 900;
+}
+@font-face {
+  font-family: 'Spiegel';
+  src: url('/assets/fonts/spiegel-regular.otf') format('opentype');
+  font-weight: 400;
+}
+@font-face {
+  font-family: 'Spiegel';
+  src: url('/assets/fonts/spiegel-semibold.otf') format('opentype');
+  font-weight: 600;
+}
+@font-face {
+  font-family: 'Spiegel';
+  src: url('/assets/fonts/spiegel-bold.otf') format('opentype');
+  font-weight: 700;
+}
+
+:root {
+  --hex-gold-bright: #f0e6d2;
+  --hex-gold: #c8aa6e;
+  --hex-gold-mid: #c89b3c;
+  --hex-gold-dark: #785a28;
+  --hex-gold-border: #463714;
+  --hex-blue-bright: #cdfafa;
+  --hex-blue: #0ac8b9;
+  --hex-blue-mid: #0397ab;
+  --hex-blue-dark: #005a82;
+  --hex-bg-deep: #010a13;
+  --hex-bg-panel: rgba(1, 10, 19, 0.92);
+  --hex-bg-card: rgba(9, 20, 40, 0.88);
+  --lol-green: #18c94b;
+  --lol-red: #e84057;
+  --lol-ally-blue: #26a9ff;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--hex-bg-deep);
+  color: var(--hex-gold-bright);
+  font-family: 'Spiegel', -apple-system, BlinkMacSystemFont, sans-serif;
+  cursor: url('/assets/ui/cursor_normal.png') 2 2, default;
+}
+
+body.aim-cursor {
+  cursor: url('/assets/ui/cursor_target.png') 16 16, crosshair;
+}
+
+button, input, select, .clickable {
+  cursor: url('/assets/ui/cursor_normal.png') 2 2, pointer;
+}
+
+#game-canvas-container {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+}
+
+#game-canvas-container canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ============================================================================
+   FLOATING IN-WORLD CHAMPION HEALTH BARS (LEAGUE OF LEGENDS EXACT STYLE)
+   ============================================================================ */
+#world-ui-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.lol-floating-bar {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  width: 152px;
+  pointer-events: none;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.85));
+  transition: opacity 0.15s ease;
+}
+
+.fhb-name {
+  font-family: 'Spiegel', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  color: #f0e6d2;
+  text-align: center;
+  text-shadow: 0 1px 2px #000, 0 0 4px #000;
+  margin-bottom: 2px;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+
+.fhb-status-row {
+  min-height: 15px;
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  margin-bottom: 2px;
+}
+
+.fhb-status-pill {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 2px;
+  letter-spacing: 0.6px;
+  text-shadow: 0 1px 2px #000;
+  border: 1px solid rgba(255,255,255,0.35);
+}
+
+.fhb-status-pill.slowed {
+  background: rgba(142, 68, 173, 0.88);
+  color: #f5d6ff;
+}
+
+.fhb-status-pill.ghosted {
+  background: rgba(10, 200, 185, 0.88);
+  color: #e0ffff;
+}
+
+.fhb-status-pill.healed {
+  background: rgba(24, 201, 75, 0.88);
+  color: #eafff0;
+}
+
+.fhb-main-frame {
+  display: flex;
+  align-items: stretch;
+  height: 22px;
+  background: #060c13;
+  border: 1.5px solid #8c723b;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px #000;
+}
+
+.fhb-level-box {
+  width: 22px;
+  background: linear-gradient(180deg, #1b2838 0%, #091019 100%);
+  border-right: 1.5px solid #8c723b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'BeaufortForLoL', serif;
+  font-weight: 700;
+  font-size: 12px;
+  color: #f0e6d2;
+  text-shadow: 0 1px 2px #000;
+}
+
+.fhb-bars-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.fhb-hp-track {
+  position: relative;
+  flex: 1;
+  background: #14191f;
+  overflow: hidden;
+}
+
+.fhb-hp-trail {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background: #f5c542;
+  transition: width 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.fhb-hp-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  transition: width 0.06s linear;
+}
+
+.lol-floating-bar.self .fhb-hp-fill {
+  background: linear-gradient(180deg, #42e66c 0%, #19a83e 55%, #0e7027 100%);
+}
+
+.lol-floating-bar.ally .fhb-hp-fill {
+  background: linear-gradient(180deg, #4dc3ff 0%, #1c88d9 55%, #0f5694 100%);
+}
+
+.lol-floating-bar.enemy .fhb-hp-fill {
+  background: linear-gradient(180deg, #ff5964 0%, #d12636 55%, #8a111d 100%);
+}
+
+/* 100 HP minor ticks & 1000 HP major ticks */
+.fhb-hp-ticks {
+  position: absolute;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(
+      to right,
+      transparent 0,
+      transparent calc(5.405% - 1px),
+      rgba(0, 0, 0, 0.55) calc(5.405% - 1px),
+      rgba(0, 0, 0, 0.55) 5.405%
+    ),
+    repeating-linear-gradient(
+      to right,
+      transparent 0,
+      transparent calc(54.05% - 1.5px),
+      rgba(0, 0, 0, 0.95) calc(54.05% - 1.5px),
+      rgba(0, 0, 0, 0.95) 54.05%
+    );
+  pointer-events: none;
+}
+
+.fhb-sub-track {
+  height: 4px;
+  background: #0d1520;
+  border-top: 1px solid #000;
+  position: relative;
+}
+
+.fhb-sub-fill {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, #9b59b6, #c39bd3);
+  width: 100%;
+}
+
+/* Floating combat text (damage / heal) */
+.floating-combat-text {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-family: 'BeaufortForLoL', serif;
+  font-weight: 900;
+  pointer-events: none;
+  text-shadow: 0 2px 4px rgba(0,0,0,0.95), 0 0 6px rgba(0,0,0,0.85);
+  animation: floatUpFade 1.05s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  white-space: nowrap;
+}
+
+.floating-combat-text.magic-dmg {
+  color: #d67eff;
+  font-size: 22px;
+}
+
+.floating-combat-text.heal-text {
+  color: #39ff6b;
+  font-size: 18px;
+}
+
+@keyframes floatUpFade {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -20%) scale(0.75);
+  }
+  20% {
+    opacity: 1;
+    transform: translate(-50%, -65%) scale(1.12);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -165%) scale(0.95);
+  }
+}
+
+/* ============================================================================
+   HEXTECH CLIENT OVERLAY & ROOM LOBBY UI
+   ============================================================================ */
+#lobby-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 35%, rgba(6, 22, 42, 0.68) 0%, rgba(1, 10, 19, 0.92) 80%);
+  backdrop-filter: blur(5px);
+  padding: 20px;
+}
+
+#lobby-overlay.hidden {
+  display: none;
+}
+
+.hextech-shell {
+  width: min(1040px, 96vw);
+  background: linear-gradient(180deg, rgba(9, 20, 36, 0.96) 0%, rgba(3, 11, 22, 0.98) 100%);
+  border: 2px solid var(--hex-gold);
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.85),
+    inset 0 0 0 1px rgba(240, 230, 210, 0.14),
+    0 0 30px rgba(200, 170, 110, 0.15);
+  position: relative;
+  overflow: hidden;
+}
+
+.hextech-shell::before {
+  content: '';
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  border: 1px solid rgba(200, 170, 110, 0.28);
+  pointer-events: none;
+}
+
+.hextech-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 26px;
+  border-bottom: 1px solid rgba(200, 170, 110, 0.4);
+  background: linear-gradient(90deg, rgba(200, 155, 60, 0.14) 0%, rgba(1, 10, 19, 0.4) 50%, rgba(10, 200, 185, 0.12) 100%);
+}
+
+.brand-group {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 2px solid var(--hex-gold);
+  box-shadow: 0 0 12px rgba(200, 170, 110, 0.45);
+}
+
+.brand-titles h1 {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 24px;
+  font-weight: 900;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  background: linear-gradient(180deg, #fff7e6 0%, #c8aa6e 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.brand-titles p {
+  font-size: 12px;
+  color: #a09b8c;
+  letter-spacing: 0.5px;
+}
+
+.header-badges {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hex-badge {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 5px 11px;
+  border: 1px solid var(--hex-gold-dark);
+  background: rgba(1, 10, 19, 0.8);
+  color: var(--hex-gold);
+}
+
+.hex-badge.teal {
+  border-color: var(--hex-blue-mid);
+  color: var(--hex-blue-bright);
+  background: rgba(3, 151, 171, 0.16);
+}
+
+/* Home View vs Room Lobby View */
+.view-panel {
+  padding: 24px 28px;
+}
+
+.view-panel.hidden {
+  display: none;
+}
+
+.home-grid {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: 24px;
+}
+
+.hex-card {
+  background: rgba(5, 14, 26, 0.86);
+  border: 1px solid rgba(200, 170, 110, 0.38);
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  position: relative;
+}
+
+.hex-card h2 {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 18px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--hex-gold-bright);
+  border-bottom: 1px solid rgba(200, 170, 110, 0.25);
+  padding-bottom: 8px;
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-group label {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #a09b8c;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.hex-input, .hex-select {
+  background: #010a13;
+  border: 1px solid #785a28;
+  color: var(--hex-gold-bright);
+  font-family: 'Spiegel', sans-serif;
+  font-size: 14px;
+  padding: 9px 12px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.hex-input:focus, .hex-select:focus {
+  border-color: var(--hex-gold-bright);
+  box-shadow: 0 0 8px rgba(200, 170, 110, 0.35);
+}
+
+/* Summoner Spell Selector (Flash, Heal, Ghost) */
+.spell-picker-section {
+  background: rgba(1, 10, 19, 0.65);
+  border: 1px solid rgba(200, 170, 110, 0.28);
+  padding: 12px 14px;
+}
+
+.spell-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.spell-picker-header span {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--hex-gold);
+}
+
+.spell-picker-header small {
+  font-size: 11px;
+  color: #8c887b;
+}
+
+.spell-picker-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.spell-option-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: rgba(9, 20, 40, 0.85);
+  border: 1.5px solid #463714;
+  transition: all 0.15s ease;
+}
+
+.spell-option-card:hover {
+  border-color: var(--hex-gold);
+  background: rgba(24, 38, 65, 0.9);
+}
+
+.spell-option-card.selected-d {
+  border-color: var(--hex-gold-bright);
+  background: linear-gradient(135deg, rgba(200, 155, 60, 0.24) 0%, rgba(9, 20, 40, 0.95) 100%);
+  box-shadow: 0 0 12px rgba(200, 155, 60, 0.35);
+}
+
+.spell-option-card.selected-f {
+  border-color: var(--hex-blue);
+  background: linear-gradient(135deg, rgba(10, 200, 185, 0.22) 0%, rgba(9, 20, 40, 0.95) 100%);
+  box-shadow: 0 0 12px rgba(10, 200, 185, 0.35);
+}
+
+.spell-option-card img {
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--hex-gold);
+  flex-shrink: 0;
+}
+
+.spell-option-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.spell-option-info strong {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 13px;
+  color: var(--hex-gold-bright);
+}
+
+.spell-option-info span {
+  font-size: 11px;
+  color: #a09b8c;
+  line-height: 1.2;
+}
+
+.spell-key-badge {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'BeaufortForLoL', serif;
+  font-weight: 900;
+  font-size: 12px;
+  background: #010a13;
+  border: 1.5px solid var(--hex-gold);
+  color: var(--hex-gold-bright);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.8);
+}
+
+.spell-option-card.selected-f .spell-key-badge {
+  border-color: var(--hex-blue);
+  color: var(--hex-blue-bright);
+}
+
+/* Hextech Buttons */
+.hex-btn {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.4px;
+  padding: 11px 18px;
+  border: 2px solid var(--hex-gold);
+  background: linear-gradient(180deg, #1e2328 0%, #11171d 100%);
+  color: var(--hex-gold-bright);
+  transition: all 0.15s ease;
+  text-align: center;
+}
+
+.hex-btn:hover:not(:disabled) {
+  border-color: var(--hex-gold-bright);
+  background: linear-gradient(180deg, #2b333c 0%, #182028 100%);
+  box-shadow: 0 0 14px rgba(200, 170, 110, 0.45);
+}
+
+.hex-btn.primary {
+  border-color: var(--hex-blue);
+  background: linear-gradient(180deg, #07596e 0%, #033042 100%);
+  color: var(--hex-blue-bright);
+}
+
+.hex-btn.primary:hover:not(:disabled) {
+  border-color: var(--hex-blue-bright);
+  background: linear-gradient(180deg, #0a7a96 0%, #05445c 100%);
+  box-shadow: 0 0 16px rgba(10, 200, 185, 0.55);
+}
+
+.hex-btn.gold-cta {
+  border-color: #f0e6d2;
+  background: linear-gradient(180deg, #c89b3c 0%, #785a28 100%);
+  color: #010a13;
+  font-weight: 900;
+}
+
+.hex-btn.gold-cta:hover:not(:disabled) {
+  background: linear-gradient(180deg, #e0b452 0%, #947032 100%);
+  box-shadow: 0 0 18px rgba(200, 155, 60, 0.65);
+}
+
+.hex-btn:disabled {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+}
+
+.btn-row {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-row > * {
+  flex: 1;
+}
+
+/* Active Room Browser List */
+.rooms-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 155px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.room-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  background: rgba(1, 10, 19, 0.72);
+  border: 1px solid rgba(200, 170, 110, 0.28);
+  transition: border-color 0.15s;
+}
+
+.room-list-item:hover {
+  border-color: var(--hex-gold);
+}
+
+.room-list-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.room-list-meta strong {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 13px;
+  color: var(--hex-gold-bright);
+}
+
+.room-list-meta small {
+  font-size: 11px;
+  color: #8c887b;
+}
+
+/* ============================================================================
+   ROOM LOBBY VIEW (SHAREABLE LINK, PASSCODE, VS CARDS, SPELL LOADOUT)
+   ============================================================================ */
+.room-share-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 18px;
+  background: linear-gradient(90deg, rgba(3, 151, 171, 0.16) 0%, rgba(9, 20, 40, 0.9) 60%, rgba(200, 155, 60, 0.16) 100%);
+  border: 1px solid var(--hex-gold);
+  margin-bottom: 18px;
+}
+
+.share-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+}
+
+.share-pill {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.share-pill label {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #a09b8c;
+}
+
+.share-pill strong {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 18px;
+  color: var(--hex-gold-bright);
+  letter-spacing: 1.5px;
+}
+
+.share-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.hex-btn.sm {
+  font-size: 12px;
+  padding: 7px 12px;
+  letter-spacing: 1px;
+}
+
+.lobby-vs-grid {
+  display: grid;
+  grid-template-columns: 1fr 76px 1fr;
+  align-items: stretch;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.vs-divider {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 28px;
+  font-weight: 900;
+  color: var(--hex-gold);
+  text-shadow: 0 0 18px rgba(200, 170, 110, 0.6);
+}
+
+.player-slot-card {
+  background: rgba(6, 16, 30, 0.9);
+  border: 1.5px solid #463714;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 14px;
+  position: relative;
+}
+
+.player-slot-card.blue-side {
+  border-top: 3px solid var(--lol-ally-blue);
+}
+
+.player-slot-card.red-side {
+  border-top: 3px solid var(--lol-red);
+}
+
+.slot-top {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.slot-portrait {
+  width: 64px;
+  height: 64px;
+  border: 2px solid var(--hex-gold);
+  position: relative;
+}
+
+.slot-portrait img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.slot-team-tag {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+}
+
+.blue-side .slot-team-tag { color: var(--lol-ally-blue); }
+.red-side .slot-team-tag { color: var(--lol-red); }
+
+.slot-player-name {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--hex-gold-bright);
+}
+
+.slot-champ-sub {
+  font-size: 12px;
+  color: #a09b8c;
+}
+
+.slot-spells-display {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(1, 10, 19, 0.75);
+  border: 1px solid rgba(200, 170, 110, 0.25);
+  padding: 10px 12px;
+}
+
+.equipped-pair {
+  display: flex;
+  gap: 10px;
+}
+
+.equipped-spell-box {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.equipped-spell-box img {
+  width: 34px;
+  height: 34px;
+  border: 1.5px solid var(--hex-gold);
+}
+
+.equipped-spell-box span {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 12px;
+  color: var(--hex-gold-bright);
+}
+
+.lobby-footer-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(200, 170, 110, 0.28);
+}
+
+/* ============================================================================
+   TOP IN-GAME SCOREBOARD & ROOM INVITE PILL
+   ============================================================================ */
+#ingame-hud {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+
+#ingame-hud.hidden {
+  display: none;
+}
+
+.top-hud-bar {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  background: linear-gradient(180deg, rgba(1, 10, 19, 0.95) 0%, rgba(7, 18, 34, 0.88) 100%);
+  border: 1.5px solid var(--hex-gold);
+  border-top: none;
+  padding: 8px 22px;
+  border-radius: 0 0 8px 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.75);
+  pointer-events: auto;
+}
+
+.score-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.score-side-name {
+  font-family: 'BeaufortForLoL', serif;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.score-side.blue .score-side-name { color: #52b8ff; }
+.score-side.red .score-side-name { color: #ff5c6c; }
+
+.score-value {
+  font-family: 'BeaufortForLoL', serif;
+  font-weight: 900;
+  font-size: 24px;
+  color: var(--hex-gold-bright);
+  min-width: 22px;
+  text-align: center;
+}
+
+.round-badge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 12px;
+  border-left: 1px solid rgba(200, 170, 110, 0.3);
+  border-right: 1px solid rgba(200, 170, 110, 0.3);
+}
+
+.round-badge strong {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 13px;
+  color: var(--hex-gold);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.round-badge small {
+  font-size: 11px;
+  color: #a09b8c;
+}
+
+.top-right-room-bar {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(1, 10, 19, 0.88);
+  border: 1px solid var(--hex-gold-dark);
+  padding: 6px 12px;
+  pointer-events: auto;
+}
+
+.top-right-room-bar span {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 12px;
+  color: var(--hex-gold);
+}
+
+/* ============================================================================
+   BOTTOM-CENTER AUTHENTIC LEAGUE OF LEGENDS ACTION BAR HUD
+   ============================================================================ */
+.bottom-lol-hud {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: flex-end;
+  background: linear-gradient(180deg, rgba(8, 16, 26, 0.96) 0%, rgba(2, 8, 15, 0.99) 100%);
+  border: 2px solid #785a28;
+  border-bottom: none;
+  border-radius: 10px 10px 0 0;
+  padding: 10px 16px 8px 14px;
+  gap: 14px;
+  box-shadow: 0 -6px 28px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(240, 230, 210, 0.2);
+  pointer-events: auto;
+}
+
+.hud-champ-cluster {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hud-portrait-wrap {
+  position: relative;
+  width: 66px;
+  height: 66px;
+  border-radius: 50%;
+  border: 2.5px solid var(--hex-gold);
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.9);
+  background: #010a13;
+}
+
+.hud-portrait-wrap img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.hud-level-diamond {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 24px;
+  height: 24px;
+  background: #06101c;
+  border: 1.5px solid var(--hex-gold);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 12px;
+  font-weight: 900;
+  color: var(--hex-gold-bright);
+}
+
+.hud-stats-box {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 3px 10px;
+  font-size: 11px;
+  color: #a09b8c;
+  background: rgba(1, 10, 19, 0.7);
+  border: 1px solid rgba(200, 170, 110, 0.22);
+  padding: 6px 9px;
+}
+
+.hud-stats-box b {
+  color: var(--hex-gold-bright);
+  font-family: 'BeaufortForLoL', serif;
+}
+
+.hud-center-col {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.hud-abilities-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.ability-slot {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  background: #040b14;
+  border: 1.5px solid var(--hex-gold);
+  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.9);
+}
+
+.ability-slot.passive-slot {
+  width: 36px;
+  height: 36px;
+  margin-right: 3px;
+}
+
+.ability-slot.summoner-slot {
+  width: 40px;
+  height: 40px;
+}
+
+.ability-slot.SummonerGroup {
+  margin-left: 6px;
+}
+
+.ability-slot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.ability-slot.disabled-dodgeball img {
+  filter: grayscale(0.92) brightness(0.42);
+}
+
+.ability-slot.disabled-dodgeball::after {
+  content: 'Q ONLY';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 8px;
+  font-weight: 700;
+  color: rgba(200, 170, 110, 0.65);
+  letter-spacing: 0.4px;
+}
+
+.ability-key {
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #050d17;
+  border: 1px solid #8c723b;
+  padding: 0 5px;
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--hex-gold-bright);
+  line-height: 13px;
+  z-index: 3;
+}
+
+.ability-cost-tag {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 10px;
+  font-weight: 700;
+  color: #ff6e7a;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+  z-index: 3;
+}
+
+.cd-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 8, 18, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 17px;
+  font-weight: 900;
+  color: #ffffff;
+  text-shadow: 0 1px 4px #000;
+  z-index: 2;
+}
+
+.cd-overlay.hidden {
+  display: none;
+}
+
+.hud-bars-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.hud-bar-outer {
+  position: relative;
+  width: 100%;
+  height: 18px;
+  background: #061019;
+  border: 1px solid #5c4822;
+  overflow: hidden;
+}
+
+.hud-bar-outer.resource {
+  height: 11px;
+}
+
+.hud-hp-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background: linear-gradient(180deg, #2ee65f 0%, #139e38 55%, #0a6121 100%);
+  width: 100%;
+  transition: width 0.08s linear;
+}
+
+.hud-res-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, #7d3c98 0%, #af7ac5 100%);
+  width: 100%;
+}
+
+.hud-bar-text {
+  position: relative;
+  z-index: 2;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffffff;
+  text-shadow: 0 1px 2px #000, 0 0 4px #000;
+}
+
+/* Bottom-Right Minimap */
+.minimap-frame {
+  position: absolute;
+  bottom: 10px;
+  right: 12px;
+  width: 164px;
+  height: 164px;
+  border: 2px solid var(--hex-gold);
+  background: #020810;
+  box-shadow: 0 0 20px rgba(0,0,0,0.9);
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.minimap-frame img.map-bg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* Zoom in on the Baron Pit quadrant (upper-left river) */
+  transform: scale(2.35) translate(16%, 18%);
+  filter: contrast(1.08) brightness(0.95);
+}
+
+.minimap-pit-ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 78px;
+  height: 78px;
+  transform: translate(-50%, -50%);
+  border: 1px dashed rgba(200, 170, 110, 0.55);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.minimap-dot {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  border: 2px solid #fff;
+  background-image: url('/assets/icons/drmundo_circle.png');
+  background-size: cover;
+  box-shadow: 0 0 6px #000;
+}
+
+.minimap-dot.blue { border-color: #26a9ff; }
+.minimap-dot.red { border-color: #ff4254; }
+
+/* Bottom-Left Controls Legend */
+.controls-hint-box {
+  position: absolute;
+  bottom: 12px;
+  left: 14px;
+  background: rgba(1, 10, 19, 0.86);
+  border: 1px solid rgba(200, 170, 110, 0.35);
+  padding: 9px 13px;
+  font-size: 11px;
+  color: #a09b8c;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: auto;
+}
+
+.controls-hint-box b {
+  color: var(--hex-gold-bright);
+  font-family: 'BeaufortForLoL', serif;
+}
+
+/* Center Announcer Banner (COUNTDOWN / FIRST BLOOD / VICTORY / DEFEAT) */
+#announcer-banner {
+  position: fixed;
+  top: 13%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 25;
+  text-align: center;
+  pointer-events: none;
+}
+
+#announcer-banner.hidden {
+  display: none;
+}
+
+.announcer-title {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 56px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 4px;
+  background: linear-gradient(180deg, #fff9e6 0%, #e6b85c 55%, #8c621f 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.95));
+  animation: bannerPop 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.announcer-sub {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 18px;
+  color: #f0e6d2;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  text-shadow: 0 2px 8px #000;
+  margin-top: 4px;
+}
+
+@keyframes bannerPop {
+  0% { transform: scale(0.65); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* Victory / Defeat Post-Match Modal */
+#gameover-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(1, 10, 19, 0.78);
+  backdrop-filter: blur(4px);
+}
+
+#gameover-modal.hidden {
+  display: none;
+}
+
+.gameover-card {
+  width: min(500px, 92vw);
+  background: linear-gradient(180deg, rgba(10, 22, 42, 0.98) 0%, rgba(2, 9, 18, 0.99) 100%);
+  border: 2px solid var(--hex-gold);
+  padding: 28px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.95);
+}
+
+.gameover-card h2 {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 44px;
+  font-weight: 900;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+}
+
+.gameover-card h2.victory {
+  color: #36d8ff;
+  text-shadow: 0 0 24px rgba(10, 200, 185, 0.75);
+}
+
+.gameover-card h2.defeat {
+  color: #ff4757;
+  text-shadow: 0 0 24px rgba(232, 64, 87, 0.75);
+}
+
+/* Toast Notification */
+#toast-container {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.hex-toast {
+  background: rgba(1, 10, 19, 0.95);
+  border: 1.5px solid var(--hex-gold);
+  color: var(--hex-gold-bright);
+  padding: 10px 18px;
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 13px;
+  letter-spacing: 0.8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.85);
+}
+
+@media (max-width: 860px) {
+  .home-grid {
+    grid-template-columns: 1fr;
+  }
+  .lobby-vs-grid {
+    grid-template-columns: 1fr;
+  }
+  .vs-divider {
+    display: none;
+  }
+  .minimap-frame, .controls-hint-box {
+    display: none;
+  }
+}
