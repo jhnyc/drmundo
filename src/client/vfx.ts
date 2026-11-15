@@ -106,8 +106,116 @@ export function spawnRingBurstVfx(
   });
 }
 
+let moveArrowBladeGeo: THREE.BufferGeometry | null = null;
+let moveArrowTexture: THREE.CanvasTexture | null = null;
+
+function getMoveArrowAssets(): { geo: THREE.BufferGeometry; tex: THREE.CanvasTexture } {
+  if (!moveArrowBladeGeo) {
+    const segments = 12;
+    const positions: number[] = [];
+    const uvs: number[] = [];
+    const indices: number[] = [];
+
+    for (let i = 0; i <= segments; i++) {
+      const s = i / segments;
+      const r = 46 * (1 - s) + 3 * s;
+      const y = 44 * Math.pow(1 - s, 1.55) + 2;
+
+      let halfW: number;
+      if (s < 0.65) {
+        const k = s / 0.65;
+        halfW = 10.5 * (1 - k) + 4.2 * k;
+      } else if (s < 0.78) {
+        const k = (s - 0.65) / 0.13;
+        halfW = 4.2 * (1 - k) + 8.8 * k;
+      } else {
+        const k = (s - 0.78) / 0.22;
+        halfW = 8.8 * (1 - k) + 0.3 * k;
+      }
+
+      positions.push(r, y, -halfW);
+      uvs.push(s, 0);
+      positions.push(r, y, halfW);
+      uvs.push(s, 1);
+
+      if (i < segments) {
+        const base = i * 2;
+        indices.push(base, base + 1, base + 2);
+        indices.push(base + 1, base + 3, base + 2);
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    moveArrowBladeGeo = geo;
+  }
+
+  if (!moveArrowTexture) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d')!;
+    const grad = ctx.createLinearGradient(0, 0, 0, 64);
+    grad.addColorStop(0, '#0b5c0b');
+    grad.addColorStop(0.14, '#38ff24');
+    grad.addColorStop(0.5, '#7bff52');
+    grad.addColorStop(0.86, '#38ff24');
+    grad.addColorStop(1, '#0b5c0b');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 64, 64);
+
+    // Subtle dark border on outer and inner ends
+    ctx.fillStyle = 'rgba(10, 70, 10, 0.75)';
+    ctx.fillRect(0, 0, 4, 64);
+    ctx.fillRect(60, 0, 4, 64);
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    moveArrowTexture = tex;
+  }
+
+  return { geo: moveArrowBladeGeo, tex: moveArrowTexture };
+}
+
 export function spawnMoveClickIndicator(x: number, z: number): void {
-  spawnRingBurstVfx(x, z, 0x2ecc71, 12, 48, 0.32);
+  const { geo, tex } = getMoveArrowAssets();
+  const group = new THREE.Group();
+  group.position.set(x, 2, z);
+
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex,
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.96,
+    side: THREE.DoubleSide,
+    depthWrite: false
+  });
+
+  const angles = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
+  for (const ang of angles) {
+    const blade = new THREE.Mesh(geo, mat);
+    blade.rotation.y = ang;
+    group.add(blade);
+  }
+
+  scene.add(group);
+
+  const duration = 0.34;
+  transientVfx.push({
+    mesh: group,
+    age: 0,
+    duration,
+    update() {
+      const t = this.age / this.duration;
+      const ease = 1 - Math.pow(1 - t, 2);
+      const s = 1.05 - 0.68 * ease;
+      group.scale.setScalar(s);
+      mat.opacity = t < 0.45 ? 0.96 : 0.96 * (1 - (t - 0.45) / 0.55);
+    }
+  });
 }
 
 function createSkybeamMesh(

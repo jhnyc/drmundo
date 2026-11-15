@@ -43,18 +43,6 @@ export function updateFloatingHealthBars() {
         const pct = Math.max(0, Math.min(100, (p.hp / p.maxHp) * 100));
         getEl(`fhb-fill-${i}`).style.width = `${pct}%`;
         getEl(`fhb-trail-${i}`).style.width = `${pct}%`;
-        const statusRow = getEl(`fhb-status-${i}`);
-        const pills = [];
-        if (p.slowTimer > 0)
-            pills.push('<span class="fhb-status-pill slowed">Slowed</span>');
-        if (p.ghostTimer > 0)
-            pills.push('<span class="fhb-status-pill ghosted">Ghosted</span>');
-        if (p.healSpeedTimer > 0)
-            pills.push('<span class="fhb-status-pill healed">Healed</span>');
-        const html = pills.join('');
-        if (statusRow.innerHTML !== html) {
-            statusRow.innerHTML = html;
-        }
     }
 }
 export function updateInGameHud() {

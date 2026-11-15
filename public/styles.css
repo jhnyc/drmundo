@@ -117,41 +117,6 @@ button, input, select, .clickable {
   white-space: nowrap;
 }
 
-.fhb-status-row {
-  min-height: 15px;
-  display: flex;
-  justify-content: center;
-  gap: 4px;
-  margin-bottom: 2px;
-}
-
-.fhb-status-pill {
-  font-family: 'BeaufortForLoL', serif;
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  padding: 1px 5px;
-  border-radius: 2px;
-  letter-spacing: 0.6px;
-  text-shadow: 0 1px 2px #000;
-  border: 1px solid rgba(255,255,255,0.35);
-}
-
-.fhb-status-pill.slowed {
-  background: rgba(142, 68, 173, 0.88);
-  color: #f5d6ff;
-}
-
-.fhb-status-pill.ghosted {
-  background: rgba(10, 200, 185, 0.88);
-  color: #e0ffff;
-}
-
-.fhb-status-pill.healed {
-  background: rgba(24, 201, 75, 0.88);
-  color: #eafff0;
-}
-
 .fhb-main-frame {
   display: flex;
   align-items: stretch;
