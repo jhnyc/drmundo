@@ -186,6 +186,7 @@ interface GameRoom {
   round: number;
   matchTime: number;
   countdownTimer: number;
+  lastBroadcastCountdownSec: number;
   roundEndTimer: number;
   nextProjId: number;
   winnerSlot?: number;
@@ -833,6 +834,30 @@ function serializePlayerSnapshot(p: ServerPlayerState | null): PlayerSnapshot | 
   };
 }
 
+function buildStateSnapshot(room: GameRoom): ServerToClientMessage {
+  const projectiles: ProjectileSnapshot[] = room.projectiles.map((pr) => ({
+    id: pr.id,
+    ownerSlot: pr.ownerSlot,
+    x: Math.round(pr.x * 10) / 10,
+    z: Math.round(pr.z * 10) / 10,
+    dirX: Math.round(pr.dirX * 1000) / 1000,
+    dirZ: Math.round(pr.dirZ * 1000) / 1000
+  }));
+
+  return {
+    type: 'state_snapshot',
+    state: room.state,
+    round: room.round,
+    countdownTimer: Math.max(0, room.countdownTimer || 0),
+    players: [
+      serializePlayerSnapshot(room.players[0]),
+      serializePlayerSnapshot(room.players[1])
+    ],
+    projectiles,
+    events: room.events
+  };
+}
+
 setInterval(() => {
   for (const room of rooms.values()) {
     if (room.state === 'round_end') {
@@ -842,6 +867,7 @@ setInterval(() => {
         resetRoundState(room);
         room.state = 'countdown';
         room.countdownTimer = 3.0;
+        room.lastBroadcastCountdownSec = -1;
         room.events.push({ type: 'round_countdown', round: room.round });
       }
     }
@@ -854,29 +880,20 @@ setInterval(() => {
     ) {
       stepRoomSimulation(room, DT);
 
-      const projectiles: ProjectileSnapshot[] = room.projectiles.map((pr) => ({
-        id: pr.id,
-        ownerSlot: pr.ownerSlot,
-        x: Math.round(pr.x * 10) / 10,
-        z: Math.round(pr.z * 10) / 10,
-        dirX: Math.round(pr.dirX * 1000) / 1000,
-        dirZ: Math.round(pr.dirZ * 1000) / 1000
-      }));
+      const countdownSec = Math.ceil(Math.max(0, room.countdownTimer || 0));
+      const countdownChanged =
+        room.state === 'countdown' && countdownSec !== room.lastBroadcastCountdownSec;
+      const shouldBroadcast =
+        room.state === 'playing' || room.events.length > 0 || countdownChanged;
 
-      const snapshot: ServerToClientMessage = {
-        type: 'state_snapshot',
-        state: room.state,
-        round: room.round,
-        countdownTimer: Math.max(0, room.countdownTimer || 0),
-        players: [
-          serializePlayerSnapshot(room.players[0]),
-          serializePlayerSnapshot(room.players[1])
-        ],
-        projectiles,
-        events: room.events
-      };
-      room.events = [];
-      broadcastToRoom(room, snapshot);
+      if (shouldBroadcast) {
+        if (room.state === 'countdown') {
+          room.lastBroadcastCountdownSec = countdownSec;
+        }
+        const snapshot = buildStateSnapshot(room);
+        room.events = [];
+        broadcastToRoom(room, snapshot);
+      }
     }
   }
 }, 1000 / TICK_RATE);
@@ -950,6 +967,7 @@ wss.on('connection', (ws: WebSocket) => {
         round: 1,
         matchTime: 0,
         countdownTimer: 0,
+        lastBroadcastCountdownSec: -1,
         roundEndTimer: 0,
         nextProjId: 1,
         botEnabled: Boolean(msg.withBot),
@@ -1129,6 +1147,7 @@ wss.on('connection', (ws: WebSocket) => {
       resetRoundState(room);
       room.state = 'countdown';
       room.countdownTimer = 3.0;
+      room.lastBroadcastCountdownSec = -1;
       room.events.push({ type: 'round_countdown', round: 1 });
       broadcastToRoom(room, serializeRoomLobby(room));
       return;
