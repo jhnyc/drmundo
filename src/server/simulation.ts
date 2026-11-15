@@ -4,6 +4,7 @@ import type {
   ServerToClientMessage
 } from '../shared/types.js';
 import { clampToBaronPitHalf } from './actions.js';
+import { trackEvent } from './analytics.js';
 import { updateBotAI } from './bot.js';
 import { MUNDO_STATS, PIT_RADIUS, SUMMONER_SPELLS } from './constants.js';
 import type { GameRoom, ServerPlayerState } from './types.js';
@@ -160,9 +161,31 @@ export function stepRoomSimulation(
             matchOver
           });
 
+          trackEvent(room.id, 'round_completed', {
+            roomId: room.id,
+            round: room.round,
+            winnerSlot: proj.ownerSlot,
+            winnerIsBot: Boolean(caster?.isBot),
+            matchOver,
+            matchTimeSec: Math.round(room.matchTime)
+          });
+
           if (matchOver) {
             room.state = 'gameover';
             room.winnerSlot = proj.ownerSlot;
+            trackEvent(room.id, 'match_completed', {
+              roomId: room.id,
+              roundsPlayed: room.round,
+              matchTimeSec: Math.round(room.matchTime),
+              bestOf: room.settings.bestOf,
+              cooldownMode: room.settings.cooldownMode,
+              withBot: room.botEnabled,
+              winnerIsBot: Boolean(caster?.isBot),
+              p0Spells: room.players[0]?.spells,
+              p1Spells: room.players[1]?.spells,
+              p0Stats: room.players[0]?.stats,
+              p1Stats: room.players[1]?.stats
+            });
             onGameOver?.(room);
           } else {
             room.state = 'round_end';

@@ -21,6 +21,7 @@ import {
   resetRoundState,
   useSummonerSpell
 } from './actions.js';
+import { trackEvent } from './analytics.js';
 import {
   DT,
   TICK_RATE,
@@ -129,7 +130,10 @@ function broadcastToRoom(room: GameRoom, payload: ServerToClientMessage): void {
 // ============================================================================
 // AUTHORITATIVE 60HZ GAME LOOP
 // ============================================================================
+let lastLagLogAt = 0;
+
 setInterval(() => {
+  const tickStart = performance.now();
   for (const room of rooms.values()) {
     if (room.clients.length === 0) continue;
 
@@ -171,6 +175,14 @@ setInterval(() => {
       }
     }
   }
+  const tickMs = performance.now() - tickStart;
+  if (tickMs > 25 && Date.now() - lastLagLogAt > 60_000) {
+    lastLagLogAt = Date.now();
+    trackEvent('server', 'tick_lag_spike', {
+      tickMs: Math.round(tickMs * 10) / 10,
+      activeRooms: rooms.size
+    });
+  }
 }, 1000 / TICK_RATE);
 
 // ============================================================================
@@ -185,6 +197,14 @@ function leaveCurrentRoom(client: ConnectedClient): void {
   if (!room) return;
 
   room.clients = room.clients.filter((c) => c !== client);
+  if (room.state !== 'lobby' && room.state !== 'gameover') {
+    trackEvent(client.id, 'player_left_early', {
+      roomId: room.id,
+      state: room.state,
+      round: room.round,
+      withBot: room.botEnabled
+    });
+  }
   if (oldSlot !== null && room.players[oldSlot]) {
     room.players[oldSlot] = null;
   }
@@ -302,6 +322,14 @@ wss.on('connection', (ws: WebSocket) => {
       client.slot = 0;
       rooms.set(roomId, room);
 
+      trackEvent(client.id, 'room_created', {
+        roomId,
+        withBot: room.botEnabled,
+        hasPasscode: Boolean(passcode),
+        bestOf: settings.bestOf,
+        cooldownMode: settings.cooldownMode
+      });
+
       sendClientMessage(ws, {
         type: 'joined_room',
         roomId,
@@ -406,6 +434,13 @@ wss.on('connection', (ws: WebSocket) => {
       client.slot = assignedSlot;
       room.clients.push(client);
 
+      trackEvent(client.id, 'room_joined', {
+        roomId,
+        slot: assignedSlot,
+        hasPasscode: Boolean(room.passcode),
+        reclaimed: false
+      });
+
       sendClientMessage(ws, {
         type: 'joined_room',
         roomId,
@@ -495,6 +530,14 @@ wss.on('connection', (ws: WebSocket) => {
       room.countdownTimer = 3.0;
       room.lastBroadcastCountdownSec = -1;
       room.events.push({ type: 'round_countdown', round: 1 });
+      trackEvent(client.id, msg.type === 'rematch' ? 'rematch_started' : 'match_started', {
+        roomId: room.id,
+        withBot: room.botEnabled,
+        bestOf: room.settings.bestOf,
+        cooldownMode: room.settings.cooldownMode,
+        p0Spells: room.players[0].spells,
+        p1Spells: room.players[1].spells
+      });
       broadcastToRoom(room, serializeRoomLobby(room));
       return;
     }
@@ -588,6 +631,7 @@ process.on('SIGINT', handleShutdown);
 process.on('SIGTERM', handleShutdown);
 
 persistence.loadInto(rooms);
+trackEvent('server', 'server_started', { restoredRooms: rooms.size });
 
 const PORT = Number(process.env.PORT) || 3000;
 server.listen(PORT, () => {
