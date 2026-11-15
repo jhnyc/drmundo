@@ -3,13 +3,25 @@
   "version": "1.0.0",
   "description": "Baron Pit Dr. Mundo 1v1 Dodgeball in the Browser with Authentic League of Legends 3D Graphics & Animations",
   "type": "module",
+  "main": "dist/server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "typecheck": "tsc --noEmit",
+    "build:server": "tsc -p tsconfig.server.json",
+    "build:client": "tsc -p tsconfig.client.json",
+    "build": "npm run build:server && npm run build:client",
+    "start": "npm run build && node dist/server.js",
+    "dev": "npm run build && node dist/server.js"
   },
   "dependencies": {
     "express": "^4.21.2",
     "three": "^0.170.0",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
+    "@types/three": "^0.187.0",
+    "@types/ws": "^8.18.2",
+    "typescript": "^7.0.2"
   }
 }

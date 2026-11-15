@@ -1,264 +1,241 @@
 // ============================================================================
-// AUTHENTIC LEAGUE OF LEGENDS DR. MUNDO AUDIO & SFX ENGINE
+// AUTHENTIC LEAGUE OF LEGENDS DR. MUNDO & SUMMONER SPELL AUDIO ENGINE
+// Uses official Riot Games / League of Legends .ogg sound effects
 // ============================================================================
-
-class MundoAudioEngine {
-  constructor() {
-    this.ctx = null;
-    this.muted = false;
-    this.chooseVo = new Audio('/assets/audio/drmundo_choose_vo.ogg');
-    this.banVo = new Audio('/assets/audio/drmundo_ban_vo.ogg');
-    this.chooseVo.volume = 0.55;
-    this.banVo.volume = 0.55;
-  }
-
-  ensureContext() {
-    if (!this.ctx) {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (AudioCtx) {
-        this.ctx = new AudioCtx();
-      }
+const SOUND_PATHS = {
+    chooseVo: ['/assets/audio/drmundo_choose_vo.ogg'],
+    banVo: ['/assets/audio/drmundo_ban_vo.ogg'],
+    flash: [
+        '/assets/audio/flash_sfx_1.ogg',
+        '/assets/audio/flash_sfx_2.ogg',
+        '/assets/audio/flash_sfx_3.ogg'
+    ],
+    heal: [
+        '/assets/audio/heal_sfx_1.ogg',
+        '/assets/audio/heal_sfx_2.ogg',
+        '/assets/audio/heal_sfx_3.ogg'
+    ],
+    ghostStart: ['/assets/audio/ghost_sfx_1.ogg'],
+    ghostLoop: ['/assets/audio/ghost_sfx_loop.ogg'],
+    ghostEnd: ['/assets/audio/ghost_sfx_end.ogg'],
+    recall: ['/assets/audio/recall_sfx.ogg'],
+    qThrowSfx: ['/assets/audio/mundo_q_throw_sfx.ogg?v=2'],
+    qHitSfx: ['/assets/audio/mundo_q_hit_sfx.ogg?v=2'],
+    qThrowVo: [
+        '/assets/audio/mundo_q_vo_0.ogg',
+        '/assets/audio/mundo_q_vo_1.ogg'
+    ],
+    qHitVo: ['/assets/audio/mundo_q_hit_vo_0.ogg']
+};
+export class MundoAudioEngine {
+    ctx = null;
+    muted = false;
+    bufferCache = new Map();
+    loadingPromises = new Map();
+    activeGhostTimers = [];
+    constructor() {
+        // Pre-fetch all official League of Legends audio files so they play with zero latency
+        this.preloadAll();
     }
-    if (this.ctx && this.ctx.state === 'suspended') {
-      this.ctx.resume().catch(() => {});
+    preloadAll() {
+        const allUrls = new Set();
+        for (const list of Object.values(SOUND_PATHS)) {
+            for (const url of list) {
+                allUrls.add(url);
+            }
+        }
+        for (const url of allUrls) {
+            // Warm browser HTTP cache immediately
+            fetch(url).catch(() => { });
+        }
     }
-    return this.ctx;
-  }
-
-  playChooseVo() {
-    if (this.muted) return;
-    try {
-      this.chooseVo.currentTime = 0;
-      this.chooseVo.play().catch(() => {});
-    } catch {}
-  }
-
-  playTauntVo() {
-    if (this.muted) return;
-    try {
-      this.banVo.currentTime = 0;
-      this.banVo.play().catch(() => {});
-    } catch {}
-  }
-
-  playMoveClick() {
-    if (this.muted) return;
-    const ctx = this.ensureContext();
-    if (!ctx) return;
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(520, now);
-    osc.frequency.exponentialRampToValueAtTime(220, now + 0.045);
-    gain.gain.setValueAtTime(0.06, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.045);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.05);
-  }
-
-  playCleaverThrow() {
-    if (this.muted) return;
-    const ctx = this.ensureContext();
-    if (!ctx) return;
-    const now = ctx.currentTime;
-
-    // 1. Metallic blade whoosh noise
-    const bufferSize = Math.floor(ctx.sampleRate * 0.26);
-    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      data[i] = (Math.random() * 2 - 1) * Math.sin((i / bufferSize) * Math.PI);
+    ensureContext() {
+        if (!this.ctx) {
+            const win = window;
+            const AudioCtx = window.AudioContext || win.webkitAudioContext;
+            if (AudioCtx) {
+                this.ctx = new AudioCtx();
+            }
+        }
+        if (this.ctx && this.ctx.state === 'suspended') {
+            this.ctx.resume().catch(() => { });
+        }
+        return this.ctx;
     }
-    const noise = ctx.createBufferSource();
-    noise.buffer = buffer;
-
-    const filter = ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.setValueAtTime(950, now);
-    filter.frequency.exponentialRampToValueAtTime(380, now + 0.24);
-    filter.Q.value = 2.4;
-
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.28, now);
-    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
-
-    noise.connect(filter).connect(gain).connect(ctx.destination);
-    noise.start(now);
-
-    // 2. Spinning saw blade metallic ring
-    const osc = ctx.createOscillator();
-    const oscGain = ctx.createGain();
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(340, now);
-    osc.frequency.exponentialRampToValueAtTime(145, now + 0.2);
-    oscGain.gain.setValueAtTime(0.11, now);
-    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.21);
-    osc.connect(oscGain).connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.22);
-  }
-
-  playCleaverHit() {
-    if (this.muted) return;
-    const ctx = this.ensureContext();
-    if (!ctx) return;
-    const now = ctx.currentTime;
-
-    // 1. Heavy meaty cleaver impact thud
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(165, now);
-    osc.frequency.exponentialRampToValueAtTime(38, now + 0.19);
-    gain.gain.setValueAtTime(0.55, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.21);
-
-    // 2. Wet bone-saw crunch & steel bite
-    const bufLen = Math.floor(ctx.sampleRate * 0.16);
-    const buf = ctx.createBuffer(1, bufLen, ctx.sampleRate);
-    const ch = buf.getChannelData(0);
-    for (let i = 0; i < bufLen; i++) {
-      ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufLen, 1.6);
+    async getDecodedBuffer(url) {
+        const cached = this.bufferCache.get(url);
+        if (cached)
+            return cached;
+        const existingPromise = this.loadingPromises.get(url);
+        if (existingPromise)
+            return existingPromise;
+        const promise = (async () => {
+            try {
+                const ctx = this.ensureContext();
+                if (!ctx)
+                    return null;
+                const res = await fetch(url);
+                const arrayBuf = await res.arrayBuffer();
+                const audioBuf = await ctx.decodeAudioData(arrayBuf);
+                this.bufferCache.set(url, audioBuf);
+                return audioBuf;
+            }
+            catch {
+                return null;
+            }
+            finally {
+                this.loadingPromises.delete(url);
+            }
+        })();
+        this.loadingPromises.set(url, promise);
+        return promise;
     }
-    const noise = ctx.createBufferSource();
-    noise.buffer = buf;
-
-    const bp = ctx.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.frequency.setValueAtTime(1450, now);
-    bp.Q.value = 1.6;
-
-    const nGain = ctx.createGain();
-    nGain.gain.setValueAtTime(0.38, now);
-    nGain.gain.exponentialRampToValueAtTime(0.005, now + 0.15);
-
-    noise.connect(bp).connect(nGain).connect(ctx.destination);
-    noise.start(now);
-  }
-
-  playCleaverMiss() {
-    if (this.muted) return;
-    const ctx = this.ensureContext();
-    if (!ctx) return;
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(190, now);
-    osc.frequency.exponentialRampToValueAtTime(75, now + 0.09);
-    gain.gain.setValueAtTime(0.12, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.1);
-  }
-
-  playFlash() {
-    if (this.muted) return;
-    const ctx = this.ensureContext();
-    if (!ctx) return;
-    const now = ctx.currentTime;
-
-    // Iconic League Flash golden snap + high-frequency shimmer
-    const osc1 = ctx.createOscillator();
-    const osc2 = ctx.createOscillator();
-    const gain = ctx.createGain();
-
-    osc1.type = 'sine';
-    osc2.type = 'triangle';
-    osc1.frequency.setValueAtTime(480, now);
-    osc1.frequency.exponentialRampToValueAtTime(1760, now + 0.14);
-    osc2.frequency.setValueAtTime(960, now);
-    osc2.frequency.exponentialRampToValueAtTime(2480, now + 0.18);
-
-    gain.gain.setValueAtTime(0.32, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
-
-    osc1.connect(gain);
-    osc2.connect(gain);
-    gain.connect(ctx.destination);
-
-    osc1.start(now);
-    osc2.start(now);
-    osc1.stop(now + 0.23);
-    osc2.stop(now + 0.23);
-  }
-
-  playHeal() {
-    if (this.muted) return;
-    const ctx = this.ensureContext();
-    if (!ctx) return;
-    const now = ctx.currentTime;
-
-    const freqs = [523.25, 659.25, 783.99, 1046.5];
-    freqs.forEach((f, idx) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      const t0 = now + idx * 0.045;
-      osc.frequency.setValueAtTime(f, t0);
-      osc.frequency.exponentialRampToValueAtTime(f * 1.04, t0 + 0.38);
-      gain.gain.setValueAtTime(0.14, t0);
-      gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.42);
-      osc.connect(gain).connect(ctx.destination);
-      osc.start(t0);
-      osc.stop(t0 + 0.44);
-    });
-  }
-
-  playGhost() {
-    if (this.muted) return;
-    const ctx = this.ensureContext();
-    if (!ctx) return;
-    const now = ctx.currentTime;
-
-    const bufLen = Math.floor(ctx.sampleRate * 0.55);
-    const buf = ctx.createBuffer(1, bufLen, ctx.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < bufLen; i++) {
-      data[i] = (Math.random() * 2 - 1) * Math.sin((i / bufLen) * Math.PI);
+    playSample(url, volume = 0.75, playbackRate = 1.0) {
+        if (this.muted)
+            return;
+        const ctx = this.ensureContext();
+        if (ctx) {
+            const cached = this.bufferCache.get(url);
+            if (cached) {
+                const src = ctx.createBufferSource();
+                src.buffer = cached;
+                src.playbackRate.value = playbackRate;
+                const gain = ctx.createGain();
+                gain.gain.value = volume;
+                src.connect(gain).connect(ctx.destination);
+                src.start(0);
+                return;
+            }
+            // Decode asynchronously & play immediately when ready
+            void this.getDecodedBuffer(url).then((buf) => {
+                if (buf && !this.muted) {
+                    const src = ctx.createBufferSource();
+                    src.buffer = buf;
+                    src.playbackRate.value = playbackRate;
+                    const gain = ctx.createGain();
+                    gain.gain.value = volume;
+                    src.connect(gain).connect(ctx.destination);
+                    src.start(0);
+                }
+                else if (!buf && !this.muted) {
+                    this.playFallbackHtmlAudio(url, volume);
+                }
+            });
+        }
+        else {
+            this.playFallbackHtmlAudio(url, volume);
+        }
     }
-    const noise = ctx.createBufferSource();
-    noise.buffer = buf;
-
-    const filter = ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.setValueAtTime(320, now);
-    filter.frequency.exponentialRampToValueAtTime(1150, now + 0.28);
-    filter.frequency.exponentialRampToValueAtTime(480, now + 0.55);
-    filter.Q.value = 3.2;
-
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.28, now);
-    gain.gain.exponentialRampToValueAtTime(0.005, now + 0.55);
-
-    noise.connect(filter).connect(gain).connect(ctx.destination);
-    noise.start(now);
-  }
-
-  playCountdownTick(isFight = false) {
-    if (this.muted) return;
-    const ctx = this.ensureContext();
-    if (!ctx) return;
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = isFight ? 'sawtooth' : 'triangle';
-    osc.frequency.setValueAtTime(isFight ? 440 : 293.66, now);
-    if (isFight) {
-      osc.frequency.exponentialRampToValueAtTime(587.33, now + 0.28);
+    playFallbackHtmlAudio(url, volume) {
+        try {
+            const el = new Audio(url);
+            el.volume = Math.max(0, Math.min(1, volume));
+            el.play().catch(() => { });
+        }
+        catch { }
     }
-    gain.gain.setValueAtTime(isFight ? 0.24 : 0.16, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + (isFight ? 0.38 : 0.18));
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + (isFight ? 0.4 : 0.2));
-  }
+    pickRandom(arr) {
+        return arr[Math.floor(Math.random() * arr.length)];
+    }
+    playChooseVo() {
+        this.playSample(SOUND_PATHS.chooseVo[0], 0.6);
+    }
+    playTauntVo() {
+        this.playSample(SOUND_PATHS.banVo[0], 0.6);
+    }
+    playMoveClick() {
+        if (this.muted)
+            return;
+        const ctx = this.ensureContext();
+        if (!ctx)
+            return;
+        const now = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(520, now);
+        osc.frequency.exponentialRampToValueAtTime(220, now + 0.045);
+        gain.gain.setValueAtTime(0.05, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.045);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.05);
+    }
+    playCleaverThrow() {
+        // Official Riot Games Dr. Mundo Q (Infected Bonesaw) cast SFX
+        this.playSample(SOUND_PATHS.qThrowSfx[0], 1.15);
+        // Play Dr. Mundo Q effort grunt on ~45% of throws, matching League of Legends
+        if (Math.random() < 0.45) {
+            this.playSample(this.pickRandom(SOUND_PATHS.qThrowVo), 0.65);
+        }
+    }
+    playCleaverHit() {
+        // Official Riot Games Dr. Mundo Q (Infected Bonesaw) impact cleave SFX
+        this.playSample(SOUND_PATHS.qHitSfx[0], 1.45);
+    }
+    playCleaverMiss() {
+        if (this.muted)
+            return;
+        const ctx = this.ensureContext();
+        if (!ctx)
+            return;
+        const now = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(170, now);
+        osc.frequency.exponentialRampToValueAtTime(65, now + 0.08);
+        gain.gain.setValueAtTime(0.09, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.09);
+    }
+    playFlash() {
+        // Official League of Legends Summoner Spell Flash SFX
+        const url = this.pickRandom(SOUND_PATHS.flash);
+        this.playSample(url, 0.88);
+    }
+    playHeal() {
+        // Official League of Legends Summoner Spell Heal SFX
+        const url = this.pickRandom(SOUND_PATHS.heal);
+        this.playSample(url, 0.88);
+    }
+    playGhost(durationSec = 7.0) {
+        // Official League of Legends Summoner Spell Ghost activation + spectral wind + fadeout SFX
+        this.playSample(SOUND_PATHS.ghostStart[0], 0.88);
+        const loopTimer = setTimeout(() => {
+            this.playSample(SOUND_PATHS.ghostLoop[0], 0.65);
+        }, 450);
+        const endDelayMs = Math.max(1500, (durationSec - 1.2) * 1000);
+        const endTimer = setTimeout(() => {
+            this.playSample(SOUND_PATHS.ghostEnd[0], 0.75);
+        }, endDelayMs);
+        this.activeGhostTimers.push(loopTimer, endTimer);
+    }
+    playRecall() {
+        // Official League of Legends Recall channel SFX
+        this.playSample(SOUND_PATHS.recall[0], 0.72);
+    }
+    playCountdownTick(isFight = false) {
+        if (this.muted)
+            return;
+        const ctx = this.ensureContext();
+        if (!ctx)
+            return;
+        const now = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = isFight ? 'sawtooth' : 'triangle';
+        osc.frequency.setValueAtTime(isFight ? 440 : 293.66, now);
+        if (isFight) {
+            osc.frequency.exponentialRampToValueAtTime(587.33, now + 0.28);
+        }
+        gain.gain.setValueAtTime(isFight ? 0.22 : 0.14, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + (isFight ? 0.38 : 0.18));
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + (isFight ? 0.4 : 0.2));
+    }
 }
-
 export const audio = new MundoAudioEngine();

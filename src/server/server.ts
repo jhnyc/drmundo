@@ -1,58 +1,44 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { WebSocketServer } from 'ws';
+import { WebSocketServer, WebSocket, RawData } from 'ws';
 import crypto from 'crypto';
+import type {
+  AnimKey,
+  BestOfFormat,
+  ClientToServerMessage,
+  CooldownMode,
+  EmoteKey,
+  GameEvent,
+  LobbyPlayerInfo,
+  PlayerMatchStats,
+  PlayerSnapshot,
+  ProjectileSnapshot,
+  RoomLobbyPayload,
+  RoomSettings,
+  RoomState,
+  RoomSummary,
+  ServerToClientMessage,
+  SummonerSpellId
+} from '../shared/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const PROJECT_ROOT = path.resolve(__dirname, '..');
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-app.use('/three', express.static(path.join(__dirname, 'node_modules/three')));
-app.use(express.static(path.join(__dirname, 'public')));
-
-app.get('/api/rooms', (req, res) => {
-  const list = [];
-  for (const [id, room] of rooms.entries()) {
-    list.push({
-      id,
-      hostName: room.players[0]?.name || 'Dr. Mundo',
-      playerCount: room.players.filter(Boolean).length + (room.botEnabled ? 1 : 0),
-      hasPasscode: Boolean(room.passcode && room.passcode.length > 0),
-      state: room.state,
-      bestOf: room.settings.bestOf
-    });
-  }
-  res.json({ rooms: list });
-});
-
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public/index.html'));
-});
+app.use('/three', express.static(path.join(PROJECT_ROOT, 'node_modules/three')));
+app.use(express.static(path.join(PROJECT_ROOT, 'public')));
 
 // ============================================================================
-// AUTHENTIC LEAGUE OF LEGENDS BARON PIT & DR. MUNDO CONSTANTS (1 unit = 1 LoL unit)
+// SERVER-SIDE TYPES & CONSTANTS (1 unit = 1 League of Legends unit)
 // ============================================================================
 const TICK_RATE = 60;
 const DT = 1 / TICK_RATE;
-
-// Baron Pit geometry in League of Legends units:
-// Center of Baron Pit is (0, 0).
-// Symmetry axis runs from Back-Right Baron Spawn (+X, -Z) to Front-Left River Mouth (-X, +Z).
-// Unit normal perpendicular to the dividing line pointing from Blue Side (NW) to Red Side (SE):
-// Dividing line direction vector: d = (-1/sqrt(2), +1/sqrt(2)) -> x + z = 0!
-//Wait: if the dividing line is x - z = 0 (running from (+650, -650) [back-right] to (-650, +650) [front-left]):
-// Wait: a line through (+650, -650) and (-650, +650) has x + z = 0!
-// And the normal vector perpendicular to that line is n = (1/sqrt(2), 1/sqrt(2))!
-// Let's check:
-// - Point (-350, -350) (North-West / Upper-Left of pit): x + z = -700 < 0 (Blue Team side!)
-// - Point (+350, +350) (South-East / Lower-Right of pit): x + z = +700 > 0 (Red Team side!)
-// - Point (+500, -500) (Back-Right Baron Spawn): x + z = 0 (Right on the dividing line at the back of the pit!)
-// - Point (-500, +500) (Front-Left River Entrance): x + z = 0 (Right on the dividing line at the mouth of the pit!)
 const INV_SQRT2 = Math.SQRT1_2;
 const PIT_RADIUS = 820; // Walkable inner radius of Baron Pit
 const LINE_BUFFER = 52; // Minimum distance from center ward line (champion hitbox barrier)
@@ -72,9 +58,38 @@ const MUNDO_STATS = {
   qMinDamage: 215,
   qSlowPercent: 0.40,
   qSlowDuration: 2.0
-};
+} as const;
 
-const SUMMONER_SPELLS = {
+interface SummonerSpellBase {
+  id: SummonerSpellId;
+  name: string;
+  cooldownFast: number;
+  cooldownStandard: number;
+}
+
+interface FlashSpellDef extends SummonerSpellBase {
+  id: 'flash';
+  range: number;
+}
+
+interface HealSpellDef extends SummonerSpellBase {
+  id: 'heal';
+  healAmount: number;
+  speedBoost: number;
+  duration: number;
+}
+
+interface GhostSpellDef extends SummonerSpellBase {
+  id: 'ghost';
+  speedBoost: number;
+  duration: number;
+}
+
+const SUMMONER_SPELLS: {
+  flash: FlashSpellDef;
+  heal: HealSpellDef;
+  ghost: GhostSpellDef;
+} = {
   flash: {
     id: 'flash',
     name: 'Flash',
@@ -101,9 +116,110 @@ const SUMMONER_SPELLS = {
   }
 };
 
-const rooms = new Map();
+interface BotAIState {
+  moveCooldown: number;
+  strafeSign: number;
+  qThinkCooldown: number;
+}
 
-function generateRoomId() {
+interface PendingCast {
+  dirX: number;
+  dirZ: number;
+}
+
+interface ServerPlayerState {
+  slot: number;
+  name: string;
+  isBot: boolean;
+  ready: boolean;
+  spells: [SummonerSpellId, SummonerSpellId];
+  score: number;
+  x: number;
+  z: number;
+  targetX: number;
+  targetZ: number;
+  angle: number;
+  hp: number;
+  maxHp: number;
+  alive: boolean;
+  anim: AnimKey;
+  emoteAnim?: EmoteKey;
+  qCd: number;
+  maxQCd: number;
+  spellCd: [number, number];
+  maxSpellCd: [number, number];
+  castTimer: number;
+  pendingCast: PendingCast | null;
+  slowTimer: number;
+  ghostTimer: number;
+  healSpeedTimer: number;
+  emoteTimer: number;
+  stats: PlayerMatchStats;
+  aiState: BotAIState | null;
+}
+
+interface ServerProjectile {
+  id: number;
+  ownerSlot: number;
+  x: number;
+  z: number;
+  startX: number;
+  startZ: number;
+  dirX: number;
+  dirZ: number;
+  speed: number;
+  maxRange: number;
+  radius: number;
+}
+
+interface ConnectedClient {
+  id: string;
+  ws: WebSocket;
+  roomId: string | null;
+  slot: number | null;
+}
+
+interface GameRoom {
+  id: string;
+  passcode: string;
+  state: RoomState;
+  round: number;
+  matchTime: number;
+  countdownTimer: number;
+  roundEndTimer: number;
+  nextProjId: number;
+  winnerSlot?: number;
+  botEnabled: boolean;
+  botDifficulty: string;
+  settings: RoomSettings;
+  clients: ConnectedClient[];
+  players: [ServerPlayerState | null, ServerPlayerState | null];
+  projectiles: ServerProjectile[];
+  events: GameEvent[];
+}
+
+const rooms = new Map<string, GameRoom>();
+
+app.get('/api/rooms', (_req: Request, res: Response) => {
+  const list: RoomSummary[] = [];
+  for (const [id, room] of rooms.entries()) {
+    list.push({
+      id,
+      hostName: room.players[0]?.name || 'Dr. Mundo',
+      playerCount: room.players.filter(Boolean).length,
+      hasPasscode: Boolean(room.passcode && room.passcode.length > 0),
+      state: room.state,
+      bestOf: room.settings.bestOf
+    });
+  }
+  res.json({ rooms: list });
+});
+
+app.get('*', (_req: Request, res: Response) => {
+  res.sendFile(path.join(PROJECT_ROOT, 'public/index.html'));
+});
+
+function generateRoomId(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
   for (let i = 0; i < 6; i++) {
@@ -112,7 +228,7 @@ function generateRoomId() {
   return rooms.has(code) ? generateRoomId() : code;
 }
 
-function getSpawnTransform(slot) {
+function getSpawnTransform(slot: number): { x: number; z: number; angle: number } {
   // slot 0 = Blue Side (NW: x + z < 0), slot 1 = Red Side (SE: x + z > 0)
   if (slot === 0) {
     return { x: -300, z: -300, angle: Math.PI * 0.25 }; // Facing SE (+X, +Z)
@@ -121,7 +237,7 @@ function getSpawnTransform(slot) {
   }
 }
 
-function clampToBaronPitHalf(x, z, slot) {
+function clampToBaronPitHalf(x: number, z: number, slot: number): { x: number; z: number } {
   // 1. Clamp to dividing line x + z = 0:
   // signedDist = (x + z) / sqrt(2).
   // For slot 0 (Blue Side), signedDist <= -LINE_BUFFER.
@@ -160,14 +276,19 @@ function clampToBaronPitHalf(x, z, slot) {
   return { x, z };
 }
 
-function createPlayerState(slot, name, spells = ['flash', 'ghost'], isBot = false) {
+function createPlayerState(
+  slot: number,
+  name: string,
+  spells: [SummonerSpellId, SummonerSpellId] = ['flash', 'ghost'],
+  isBot = false
+): ServerPlayerState {
   const spawn = getSpawnTransform(slot);
   return {
     slot,
     name: name || (slot === 0 ? 'Blue Mundo' : 'Red Mundo'),
     isBot,
     ready: isBot ? true : false,
-    spells: spells.slice(0, 2),
+    spells: [spells[0], spells[1]],
     score: 0,
     x: spawn.x,
     z: spawn.z,
@@ -193,15 +314,22 @@ function createPlayerState(slot, name, spells = ['flash', 'ghost'], isBot = fals
       cleaversHit: 0,
       damageDealt: 0
     },
-    aiState: isBot ? {
-      moveCooldown: 0,
-      strafeSign: 1,
-      qThinkCooldown: 0.6
-    } : null
+    aiState: isBot
+      ? {
+          moveCooldown: 0,
+          strafeSign: 1,
+          qThinkCooldown: 0.6
+        }
+      : null
   };
 }
 
-function resetRoundState(room) {
+function getSpellCooldown(spellId: SummonerSpellId, fastCd: boolean): number {
+  const def = SUMMONER_SPELLS[spellId] || SUMMONER_SPELLS.flash;
+  return fastCd ? def.cooldownFast : def.cooldownStandard;
+}
+
+function resetRoundState(room: GameRoom): void {
   room.projectiles = [];
   room.events = [];
   const fastCd = room.settings.cooldownMode !== 'standard';
@@ -226,14 +354,27 @@ function resetRoundState(room) {
     p.healSpeedTimer = 0;
     p.emoteTimer = 0;
     p.spellCd = [0, 0];
-    p.maxSpellCd = p.spells.map(spId => {
-      const def = SUMMONER_SPELLS[spId] || SUMMONER_SPELLS.flash;
-      return fastCd ? def.cooldownFast : def.cooldownStandard;
-    });
+    p.maxSpellCd = [
+      getSpellCooldown(p.spells[0], fastCd),
+      getSpellCooldown(p.spells[1], fastCd)
+    ];
   }
 }
 
-function serializeRoomLobby(room) {
+function serializeLobbyPlayer(p: ServerPlayerState | null, idx: number): LobbyPlayerInfo | null {
+  if (!p) return null;
+  return {
+    slot: idx,
+    name: p.name,
+    isBot: p.isBot,
+    ready: p.ready,
+    spells: p.spells,
+    score: p.score,
+    stats: p.stats
+  };
+}
+
+function serializeRoomLobby(room: GameRoom): RoomLobbyPayload {
   return {
     type: 'room_update',
     roomId: room.id,
@@ -244,22 +385,23 @@ function serializeRoomLobby(room) {
     settings: room.settings,
     botEnabled: room.botEnabled,
     botDifficulty: room.botDifficulty,
-    players: room.players.map((p, idx) => p ? {
-      slot: idx,
-      name: p.name,
-      isBot: p.isBot,
-      ready: p.ready,
-      spells: p.spells,
-      score: p.score,
-      stats: p.stats
-    } : null)
+    players: [
+      serializeLobbyPlayer(room.players[0], 0),
+      serializeLobbyPlayer(room.players[1], 1)
+    ]
   };
 }
 
-function broadcastToRoom(room, payload) {
+function sendClientMessage(ws: WebSocket, payload: ServerToClientMessage): void {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(payload));
+  }
+}
+
+function broadcastToRoom(room: GameRoom, payload: ServerToClientMessage): void {
   const msg = JSON.stringify(payload);
   for (const client of room.clients) {
-    if (client.ws.readyState === 1) {
+    if (client.ws.readyState === WebSocket.OPEN) {
       client.ws.send(msg);
     }
   }
@@ -268,7 +410,12 @@ function broadcastToRoom(room, payload) {
 // ============================================================================
 // AUTHORITATIVE 60HZ GAME SIMULATION
 // ============================================================================
-function castInfectedBonesaw(room, player, targetX, targetZ) {
+function castInfectedBonesaw(
+  room: GameRoom,
+  player: ServerPlayerState,
+  targetX: number,
+  targetZ: number
+): void {
   if (!player.alive || player.qCd > 0 || player.castTimer > 0) return;
   const dx = targetX - player.x;
   const dz = targetZ - player.z;
@@ -300,7 +447,13 @@ function castInfectedBonesaw(room, player, targetX, targetZ) {
   });
 }
 
-function useSummonerSpell(room, player, spellIndex, targetX, targetZ) {
+function useSummonerSpell(
+  room: GameRoom,
+  player: ServerPlayerState,
+  spellIndex: number,
+  targetX: number,
+  targetZ: number
+): void {
   if (!player.alive) return;
   if (spellIndex !== 0 && spellIndex !== 1) return;
   if (player.spellCd[spellIndex] > 0) return;
@@ -315,12 +468,13 @@ function useSummonerSpell(room, player, spellIndex, targetX, targetZ) {
   player.maxSpellCd[spellIndex] = cd;
 
   if (spellId === 'flash') {
+    const flashDef = SUMMONER_SPELLS.flash;
     const oldX = player.x;
     const oldZ = player.z;
     const dx = targetX - player.x;
     const dz = targetZ - player.z;
     const dist = Math.hypot(dx, dz);
-    const actualDist = Math.min(dist, def.range);
+    const actualDist = Math.min(dist, flashDef.range);
     const dirX = dist > 1e-3 ? dx / dist : Math.sin(player.angle);
     const dirZ = dist > 1e-3 ? dz / dist : Math.cos(player.angle);
 
@@ -344,45 +498,52 @@ function useSummonerSpell(room, player, spellIndex, targetX, targetZ) {
       toZ: player.z
     });
   } else if (spellId === 'heal') {
+    const healDef = SUMMONER_SPELLS.heal;
     const prevHp = player.hp;
-    player.hp = Math.min(player.maxHp, player.hp + def.healAmount);
+    player.hp = Math.min(player.maxHp, player.hp + healDef.healAmount);
     const healed = Math.round(player.hp - prevHp);
-    player.healSpeedTimer = def.duration;
+    player.healSpeedTimer = healDef.duration;
 
     room.events.push({
       type: 'spell_heal',
       slot: player.slot,
       x: player.x,
       z: player.z,
-      amount: healed || def.healAmount
+      amount: healed || healDef.healAmount
     });
   } else if (spellId === 'ghost') {
-    player.ghostTimer = def.duration;
+    const ghostDef = SUMMONER_SPELLS.ghost;
+    player.ghostTimer = ghostDef.duration;
     room.events.push({
       type: 'spell_ghost',
       slot: player.slot,
       x: player.x,
       z: player.z,
-      duration: def.duration
+      duration: ghostDef.duration
     });
   }
 }
 
-function updateBotAI(room, bot, opponent, dt) {
-  if (!bot.alive || !opponent || !opponent.alive) return;
+function updateBotAI(
+  room: GameRoom,
+  bot: ServerPlayerState,
+  opponent: ServerPlayerState | null,
+  dt: number
+): void {
+  if (!bot.alive || !opponent || !opponent.alive || !bot.aiState) return;
   const ai = bot.aiState;
   ai.moveCooldown -= dt;
   ai.qThinkCooldown -= dt;
 
   // Check if any enemy projectile is heading toward bot -> dodge perpendicular!
-  let dangerProj = null;
+  let dangerProj: ServerProjectile | null = null;
   for (const proj of room.projectiles) {
     if (proj.ownerSlot !== bot.slot) {
       const toBotX = bot.x - proj.x;
       const toBotZ = bot.z - proj.z;
       const forwardDot = toBotX * proj.dirX + toBotZ * proj.dirZ;
       if (forwardDot > -40 && forwardDot < 700) {
-        const perpDist = Math.abs(toBotX * (-proj.dirZ) + toBotZ * proj.dirX);
+        const perpDist = Math.abs(toBotX * -proj.dirZ + toBotZ * proj.dirX);
         if (perpDist < MUNDO_STATS.hitboxRadius + MUNDO_STATS.qRadius + 85) {
           dangerProj = proj;
           break;
@@ -459,7 +620,7 @@ function updateBotAI(room, bot, opponent, dt) {
   }
 }
 
-function stepRoomSimulation(room, dt) {
+function stepRoomSimulation(room: GameRoom, dt: number): void {
   if (room.state === 'countdown') {
     room.countdownTimer -= dt;
     if (room.countdownTimer <= 0) {
@@ -540,10 +701,10 @@ function stepRoomSimulation(room, dt) {
     const dz = p.targetZ - p.z;
     const dist = Math.hypot(dx, dz);
     if (dist > 4) {
-      let speed = MUNDO_STATS.baseMoveSpeed;
-      if (p.ghostTimer > 0) speed *= (1 + SUMMONER_SPELLS.ghost.speedBoost);
-      if (p.healSpeedTimer > 0) speed *= (1 + SUMMONER_SPELLS.heal.speedBoost);
-      if (p.slowTimer > 0) speed *= (1 - MUNDO_STATS.qSlowPercent);
+      let speed: number = MUNDO_STATS.baseMoveSpeed;
+      if (p.ghostTimer > 0) speed *= 1 + SUMMONER_SPELLS.ghost.speedBoost;
+      if (p.healSpeedTimer > 0) speed *= 1 + SUMMONER_SPELLS.heal.speedBoost;
+      if (p.slowTimer > 0) speed *= 1 - MUNDO_STATS.qSlowPercent;
 
       const step = Math.min(dist, speed * dt);
       const nx = p.x + (dx / dist) * step;
@@ -606,7 +767,7 @@ function stepRoomSimulation(room, dt) {
           if (caster) caster.score += 1;
 
           const winsNeeded = Math.ceil((room.settings.bestOf || 3) / 2);
-          const matchOver = caster && caster.score >= winsNeeded;
+          const matchOver = Boolean(caster && caster.score >= winsNeeded);
 
           room.events.push({
             type: 'round_kill',
@@ -645,6 +806,33 @@ function stepRoomSimulation(room, dt) {
   }
 }
 
+function serializePlayerSnapshot(p: ServerPlayerState | null): PlayerSnapshot | null {
+  if (!p) return null;
+  return {
+    slot: p.slot,
+    name: p.name,
+    x: Math.round(p.x * 10) / 10,
+    z: Math.round(p.z * 10) / 10,
+    targetX: Math.round(p.targetX * 10) / 10,
+    targetZ: Math.round(p.targetZ * 10) / 10,
+    angle: Math.round(p.angle * 1000) / 1000,
+    hp: Math.round(p.hp),
+    maxHp: p.maxHp,
+    alive: p.alive,
+    anim: p.anim,
+    qCd: Math.round(p.qCd * 100) / 100,
+    maxQCd: p.maxQCd,
+    spellCd: [Math.round(p.spellCd[0] * 100) / 100, Math.round(p.spellCd[1] * 100) / 100],
+    maxSpellCd: p.maxSpellCd,
+    spells: p.spells,
+    slowTimer: Math.round(p.slowTimer * 100) / 100,
+    ghostTimer: Math.round(p.ghostTimer * 100) / 100,
+    healSpeedTimer: Math.round(p.healSpeedTimer * 100) / 100,
+    score: p.score,
+    stats: p.stats
+  };
+}
+
 setInterval(() => {
   for (const room of rooms.values()) {
     if (room.state === 'round_end') {
@@ -658,45 +846,33 @@ setInterval(() => {
       }
     }
 
-    if (room.state === 'countdown' || room.state === 'playing' || room.state === 'round_end' || room.state === 'gameover') {
+    if (
+      room.state === 'countdown' ||
+      room.state === 'playing' ||
+      room.state === 'round_end' ||
+      room.state === 'gameover'
+    ) {
       stepRoomSimulation(room, DT);
 
-      const snapshot = {
+      const projectiles: ProjectileSnapshot[] = room.projectiles.map((pr) => ({
+        id: pr.id,
+        ownerSlot: pr.ownerSlot,
+        x: Math.round(pr.x * 10) / 10,
+        z: Math.round(pr.z * 10) / 10,
+        dirX: Math.round(pr.dirX * 1000) / 1000,
+        dirZ: Math.round(pr.dirZ * 1000) / 1000
+      }));
+
+      const snapshot: ServerToClientMessage = {
         type: 'state_snapshot',
         state: room.state,
         round: room.round,
         countdownTimer: Math.max(0, room.countdownTimer || 0),
-        players: room.players.map(p => p ? {
-          slot: p.slot,
-          name: p.name,
-          x: Math.round(p.x * 10) / 10,
-          z: Math.round(p.z * 10) / 10,
-          targetX: Math.round(p.targetX * 10) / 10,
-          targetZ: Math.round(p.targetZ * 10) / 10,
-          angle: Math.round(p.angle * 1000) / 1000,
-          hp: Math.round(p.hp),
-          maxHp: p.maxHp,
-          alive: p.alive,
-          anim: p.anim,
-          qCd: Math.round(p.qCd * 100) / 100,
-          maxQCd: p.maxQCd,
-          spellCd: [Math.round(p.spellCd[0] * 100) / 100, Math.round(p.spellCd[1] * 100) / 100],
-          maxSpellCd: p.maxSpellCd,
-          spells: p.spells,
-          slowTimer: Math.round(p.slowTimer * 100) / 100,
-          ghostTimer: Math.round(p.ghostTimer * 100) / 100,
-          healSpeedTimer: Math.round(p.healSpeedTimer * 100) / 100,
-          score: p.score,
-          stats: p.stats
-        } : null),
-        projectiles: room.projectiles.map(pr => ({
-          id: pr.id,
-          ownerSlot: pr.ownerSlot,
-          x: Math.round(pr.x * 10) / 10,
-          z: Math.round(pr.z * 10) / 10,
-          dirX: Math.round(pr.dirX * 1000) / 1000,
-          dirZ: Math.round(pr.dirZ * 1000) / 1000
-        })),
+        players: [
+          serializePlayerSnapshot(room.players[0]),
+          serializePlayerSnapshot(room.players[1])
+        ],
+        projectiles,
         events: room.events
       };
       room.events = [];
@@ -708,18 +884,24 @@ setInterval(() => {
 // ============================================================================
 // WEBSOCKET CONNECTION & ROOM SIGNALING
 // ============================================================================
-wss.on('connection', (ws) => {
-  const client = {
+function parseBestOf(val: unknown): BestOfFormat {
+  const num = Number(val);
+  if (num === 1 || num === 3 || num === 5) return num;
+  return 3;
+}
+
+wss.on('connection', (ws: WebSocket) => {
+  const client: ConnectedClient = {
     id: crypto.randomUUID(),
     ws,
     roomId: null,
     slot: null
   };
 
-  ws.on('message', (raw) => {
-    let msg;
+  ws.on('message', (raw: RawData) => {
+    let msg: ClientToServerMessage;
     try {
-      msg = JSON.parse(raw.toString());
+      msg = JSON.parse(raw.toString()) as ClientToServerMessage;
     } catch {
       return;
     }
@@ -728,15 +910,15 @@ wss.on('connection', (ws) => {
       const code = (msg.roomId || '').trim().toUpperCase();
       const room = rooms.get(code);
       if (!room) {
-        ws.send(JSON.stringify({ type: 'room_check_result', exists: false, roomId: code }));
+        sendClientMessage(ws, { type: 'room_check_result', exists: false, roomId: code });
       } else {
-        ws.send(JSON.stringify({
+        sendClientMessage(ws, {
           type: 'room_check_result',
           exists: true,
           roomId: code,
           hasPasscode: Boolean(room.passcode && room.passcode.length > 0),
           hostName: room.players[0]?.name || 'Dr. Mundo'
-        }));
+        });
       }
       return;
     }
@@ -745,18 +927,22 @@ wss.on('connection', (ws) => {
       leaveCurrentRoom(client);
       const roomId = (msg.customCode || '').trim().toUpperCase() || generateRoomId();
       if (rooms.has(roomId)) {
-        ws.send(JSON.stringify({ type: 'error_msg', message: 'Room code already exists. Try another code.' }));
+        sendClientMessage(ws, {
+          type: 'error_msg',
+          message: 'Room code already exists. Try another code.'
+        });
         return;
       }
 
       const passcode = (msg.passcode || '').trim();
       const spells = validateSpells(msg.spells);
-      const settings = {
-        bestOf: [1, 3, 5].includes(Number(msg.bestOf)) ? Number(msg.bestOf) : 3,
-        cooldownMode: msg.cooldownMode === 'standard' ? 'standard' : 'fast'
+      const cooldownMode: CooldownMode = msg.cooldownMode === 'standard' ? 'standard' : 'fast';
+      const settings: RoomSettings = {
+        bestOf: parseBestOf(msg.bestOf),
+        cooldownMode
       };
 
-      const room = {
+      const room: GameRoom = {
         id: roomId,
         passcode,
         state: 'lobby',
@@ -771,7 +957,9 @@ wss.on('connection', (ws) => {
         clients: [client],
         players: [
           createPlayerState(0, (msg.name || 'Mundo #1').slice(0, 20), spells, false),
-          msg.withBot ? createPlayerState(1, 'Corporate Mundo (Bot)', ['flash', 'ghost'], true) : null
+          msg.withBot
+            ? createPlayerState(1, 'Corporate Mundo (Bot)', ['flash', 'ghost'], true)
+            : null
         ],
         projectiles: [],
         events: []
@@ -781,13 +969,13 @@ wss.on('connection', (ws) => {
       client.slot = 0;
       rooms.set(roomId, room);
 
-      ws.send(JSON.stringify({
+      sendClientMessage(ws, {
         type: 'joined_room',
         roomId,
         slot: 0,
         passcode,
         lobby: serializeRoomLobby(room)
-      }));
+      });
       broadcastToRoom(room, serializeRoomLobby(room));
       return;
     }
@@ -796,7 +984,11 @@ wss.on('connection', (ws) => {
       const roomId = (msg.roomId || '').trim().toUpperCase();
       const room = rooms.get(roomId);
       if (!room) {
-        ws.send(JSON.stringify({ type: 'error_msg', code: 'NOT_FOUND', message: `Room "${roomId}" was not found.` }));
+        sendClientMessage(ws, {
+          type: 'error_msg',
+          code: 'NOT_FOUND',
+          message: `Room "${roomId}" was not found.`
+        });
         return;
       }
 
@@ -804,12 +996,12 @@ wss.on('connection', (ws) => {
       if (room.passcode && room.passcode.length > 0) {
         const provided = (msg.passcode || '').trim();
         if (provided !== room.passcode) {
-          ws.send(JSON.stringify({
+          sendClientMessage(ws, {
             type: 'error_msg',
             code: 'INVALID_PASSCODE',
             roomId,
             message: provided ? 'Incorrect room passcode.' : 'This room requires a passcode.'
-          }));
+          });
           return;
         }
       }
@@ -817,7 +1009,7 @@ wss.on('connection', (ws) => {
       leaveCurrentRoom(client);
 
       // Assign open slot (if slot 1 was a Bot, replace the Bot with the human joiner!)
-      let assignedSlot = -1;
+      let assignedSlot: 0 | 1 | -1 = -1;
       if (!room.players[0]) {
         assignedSlot = 0;
       } else if (!room.players[1] || room.players[1].isBot) {
@@ -826,7 +1018,11 @@ wss.on('connection', (ws) => {
       }
 
       if (assignedSlot === -1) {
-        ws.send(JSON.stringify({ type: 'error_msg', code: 'ROOM_FULL', message: 'This 1v1 room is already full (2/2 players).' }));
+        sendClientMessage(ws, {
+          type: 'error_msg',
+          code: 'ROOM_FULL',
+          message: 'This 1v1 room is already full (2/2 players).'
+        });
         return;
       }
 
@@ -842,19 +1038,19 @@ wss.on('connection', (ws) => {
       client.slot = assignedSlot;
       room.clients.push(client);
 
-      ws.send(JSON.stringify({
+      sendClientMessage(ws, {
         type: 'joined_room',
         roomId,
         slot: assignedSlot,
         passcode: room.passcode,
         lobby: serializeRoomLobby(room)
-      }));
+      });
       broadcastToRoom(room, serializeRoomLobby(room));
       return;
     }
 
     // All subsequent actions require being in a room
-    const room = client.roomId ? rooms.get(client.roomId) : null;
+    const room = client.roomId ? rooms.get(client.roomId) : undefined;
     if (!room || client.slot === null) return;
     const player = room.players[client.slot];
     if (!player) return;
@@ -862,10 +1058,10 @@ wss.on('connection', (ws) => {
     if (msg.type === 'select_spells') {
       player.spells = validateSpells(msg.spells);
       const fastCd = room.settings.cooldownMode !== 'standard';
-      player.maxSpellCd = player.spells.map(spId => {
-        const def = SUMMONER_SPELLS[spId] || SUMMONER_SPELLS.flash;
-        return fastCd ? def.cooldownFast : def.cooldownStandard;
-      });
+      player.maxSpellCd = [
+        getSpellCooldown(player.spells[0], fastCd),
+        getSpellCooldown(player.spells[1], fastCd)
+      ];
       broadcastToRoom(room, serializeRoomLobby(room));
       return;
     }
@@ -893,8 +1089,8 @@ wss.on('connection', (ws) => {
 
     if (msg.type === 'update_settings') {
       if (client.slot === 0 && room.state === 'lobby') {
-        if ([1, 3, 5].includes(Number(msg.bestOf))) {
-          room.settings.bestOf = Number(msg.bestOf);
+        if (msg.bestOf !== undefined) {
+          room.settings.bestOf = parseBestOf(msg.bestOf);
         }
         if (msg.cooldownMode === 'fast' || msg.cooldownMode === 'standard') {
           room.settings.cooldownMode = msg.cooldownMode;
@@ -912,7 +1108,10 @@ wss.on('connection', (ws) => {
 
     if (msg.type === 'start_match' || msg.type === 'rematch') {
       if (!room.players[0] || !room.players[1]) {
-        ws.send(JSON.stringify({ type: 'error_msg', message: 'Waiting for opponent (or enable AI Bot to practice).' }));
+        sendClientMessage(ws, {
+          type: 'error_msg',
+          message: 'Waiting for opponent (or enable AI Bot to practice).'
+        });
         return;
       }
       room.round = 1;
@@ -980,8 +1179,8 @@ wss.on('connection', (ws) => {
 
     if (msg.type === 'emote') {
       if (!player.alive || player.castTimer > 0) return;
-      const allowed = ['taunt', 'joke', 'dance', 'laugh', 'recall'];
-      const emote = allowed.includes(msg.emote) ? msg.emote : 'taunt';
+      const allowed: EmoteKey[] = ['taunt', 'joke', 'dance', 'laugh', 'recall'];
+      const emote: EmoteKey = allowed.includes(msg.emote) ? msg.emote : 'taunt';
       player.targetX = player.x;
       player.targetZ = player.z;
       player.emoteAnim = emote;
@@ -996,12 +1195,12 @@ wss.on('connection', (ws) => {
   });
 });
 
-function validateSpells(spells) {
-  const valid = ['flash', 'heal', 'ghost'];
+function validateSpells(spells: unknown): [SummonerSpellId, SummonerSpellId] {
+  const valid: SummonerSpellId[] = ['flash', 'heal', 'ghost'];
   if (!Array.isArray(spells)) return ['flash', 'ghost'];
-  const filtered = [];
+  const filtered: SummonerSpellId[] = [];
   for (const s of spells) {
-    const id = String(s).toLowerCase();
+    const id = String(s).toLowerCase() as SummonerSpellId;
     if (valid.includes(id) && !filtered.includes(id)) {
       filtered.push(id);
     }
@@ -1011,10 +1210,10 @@ function validateSpells(spells) {
       filtered.push(fallback);
     }
   }
-  return filtered.slice(0, 2);
+  return [filtered[0] || 'flash', filtered[1] || 'ghost'];
 }
 
-function leaveCurrentRoom(client) {
+function leaveCurrentRoom(client: ConnectedClient): void {
   if (!client.roomId) return;
   const room = rooms.get(client.roomId);
   client.roomId = null;
@@ -1022,7 +1221,7 @@ function leaveCurrentRoom(client) {
   client.slot = null;
   if (!room) return;
 
-  room.clients = room.clients.filter(c => c !== client);
+  room.clients = room.clients.filter((c) => c !== client);
   if (oldSlot !== null && room.players[oldSlot]) {
     room.players[oldSlot] = null;
   }
@@ -1041,13 +1240,13 @@ function leaveCurrentRoom(client) {
     for (const c of room.clients) {
       if (c.slot === 1) {
         c.slot = 0;
-        c.ws.send(JSON.stringify({
+        sendClientMessage(c.ws, {
           type: 'joined_room',
           roomId: room.id,
           slot: 0,
           passcode: room.passcode,
           lobby: serializeRoomLobby(room)
-        }));
+        });
       }
     }
   }
@@ -1057,7 +1256,7 @@ function leaveCurrentRoom(client) {
   broadcastToRoom(room, serializeRoomLobby(room));
 }
 
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 server.listen(PORT, () => {
   console.log(`Baron Pit Dr. Mundo 1v1 server running at http://localhost:${PORT}`);
 });
