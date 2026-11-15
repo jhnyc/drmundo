@@ -48,6 +48,10 @@ const snapshotPath =
   process.env.ROOMS_SNAPSHOT_PATH || path.join(PROJECT_ROOT, 'data', 'rooms-snapshot.json');
 const persistence = new RoomPersistence(snapshotPath);
 
+app.get('/healthz', (_req: Request, res: Response) => {
+  res.status(200).json({ ok: true, rooms: rooms.size });
+});
+
 app.get('/api/rooms', (_req: Request, res: Response) => {
   const list: RoomSummary[] = [];
   for (const [id, room] of rooms.entries()) {
