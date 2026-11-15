@@ -1,0 +1,15 @@
+{
+  "name": "baron-pit-drmundo-1v1",
+  "version": "1.0.0",
+  "description": "Baron Pit Dr. Mundo 1v1 Dodgeball in the Browser with Authentic League of Legends 3D Graphics & Animations",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "three": "^0.170.0",
+    "ws": "^8.18.0"
+  }
+}
