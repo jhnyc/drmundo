@@ -925,7 +925,8 @@ wss.on('connection', (ws: WebSocket) => {
 
     if (msg.type === 'create_room') {
       leaveCurrentRoom(client);
-      const roomId = (msg.customCode || '').trim().toUpperCase() || generateRoomId();
+      const rawCustom = (msg.customCode || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
+      const roomId = rawCustom || generateRoomId();
       if (rooms.has(roomId)) {
         sendClientMessage(ws, {
           type: 'error_msg',
@@ -1056,6 +1057,7 @@ wss.on('connection', (ws: WebSocket) => {
     if (!player) return;
 
     if (msg.type === 'select_spells') {
+      if (room.state !== 'lobby') return;
       player.spells = validateSpells(msg.spells);
       const fastCd = room.settings.cooldownMode !== 'standard';
       player.maxSpellCd = [
@@ -1075,6 +1077,7 @@ wss.on('connection', (ws: WebSocket) => {
     }
 
     if (msg.type === 'toggle_bot') {
+      if (client.slot !== 0 || room.state !== 'lobby') return;
       // Only when slot 1 has no human player
       if (room.players[1] && !room.players[1].isBot) return;
       room.botEnabled = !room.botEnabled;
@@ -1107,6 +1110,8 @@ wss.on('connection', (ws: WebSocket) => {
     }
 
     if (msg.type === 'start_match' || msg.type === 'rematch') {
+      if (msg.type === 'start_match' && (client.slot !== 0 || room.state !== 'lobby')) return;
+      if (msg.type === 'rematch' && room.state !== 'gameover') return;
       if (!room.players[0] || !room.players[1]) {
         sendClientMessage(ws, {
           type: 'error_msg',
@@ -1116,6 +1121,7 @@ wss.on('connection', (ws: WebSocket) => {
       }
       room.round = 1;
       room.matchTime = 0;
+      room.winnerSlot = undefined;
       room.players[0].score = 0;
       room.players[1].score = 0;
       room.players[0].stats = { cleaversThrown: 0, cleaversHit: 0, damageDealt: 0 };
@@ -1129,7 +1135,9 @@ wss.on('connection', (ws: WebSocket) => {
     }
 
     if (msg.type === 'return_to_lobby') {
+      if (room.state !== 'gameover' && client.slot !== 0) return;
       room.state = 'lobby';
+      room.winnerSlot = undefined;
       room.projectiles = [];
       for (const p of room.players) {
         if (p && !p.isBot) p.ready = false;
@@ -1171,8 +1179,10 @@ wss.on('connection', (ws: WebSocket) => {
     if (msg.type === 'cast_spell') {
       if (room.state !== 'playing' || !player.alive) return;
       const spellIndex = Number(msg.spellIndex);
-      const tx = Number(msg.x) || player.x;
-      const tz = Number(msg.z) || player.z;
+      const rawX = Number(msg.x);
+      const rawZ = Number(msg.z);
+      const tx = Number.isFinite(rawX) ? rawX : player.x;
+      const tz = Number.isFinite(rawZ) ? rawZ : player.z;
       useSummonerSpell(room, player, spellIndex, tx, tz);
       return;
     }
