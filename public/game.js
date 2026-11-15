@@ -1145,7 +1145,8 @@ function updateInGameHud() {
     // HP Bar
     const hpPct = Math.max(0, Math.min(100, (me.hp / me.maxHp) * 100));
     getEl('hud-hp-bar-fill').style.width = `${hpPct}%`;
-    getEl('hud-hp-bar-text').textContent = `${Math.round(me.hp)} / ${me.maxHp} (+16.0/s)`;
+    getEl('hud-hp-bar-text').textContent = `${Math.round(me.hp)} / ${me.maxHp}`;
+    getEl('hud-hp-regen').textContent = '+16.0';
     // Q Cooldown
     const cdQ = getEl('hud-cd-q');
     if (me.qCd > 0) {
@@ -1255,6 +1256,68 @@ function bindSpellPickerEvents(containerId) {
 bindSpellPickerEvents('home-spell-picker');
 bindSpellPickerEvents('lobby-spell-picker');
 // ============================================================================
+// CUSTOM HEXTECH DROPDOWN COMPONENT (NO NATIVE HTML5 SELECT)
+// ============================================================================
+function getDropdownValue(id) {
+    const el = document.getElementById(id);
+    return el?.getAttribute('data-value') || '';
+}
+function initHexDropdowns() {
+    const dropdowns = document.querySelectorAll('.hex-dropdown');
+    const closeAllDropdowns = (except) => {
+        dropdowns.forEach((dd) => {
+            if (dd !== except) {
+                dd.classList.remove('open');
+                const trig = dd.querySelector('.hex-dropdown-trigger');
+                if (trig)
+                    trig.setAttribute('aria-expanded', 'false');
+            }
+        });
+    };
+    dropdowns.forEach((dd) => {
+        const trigger = dd.querySelector('.hex-dropdown-trigger');
+        const label = dd.querySelector('.hex-dropdown-label');
+        const options = dd.querySelectorAll('.hex-dropdown-option');
+        if (!trigger || !label)
+            return;
+        trigger.addEventListener('click', (e) => {
+            e.stopPropagation();
+            audio.ensureContext();
+            const isOpen = dd.classList.contains('open');
+            closeAllDropdowns(dd);
+            if (isOpen) {
+                dd.classList.remove('open');
+                trigger.setAttribute('aria-expanded', 'false');
+            }
+            else {
+                dd.classList.add('open');
+                trigger.setAttribute('aria-expanded', 'true');
+            }
+        });
+        options.forEach((opt) => {
+            opt.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const val = opt.getAttribute('data-value') || '';
+                dd.setAttribute('data-value', val);
+                label.textContent = opt.textContent || '';
+                options.forEach((o) => o.classList.remove('selected'));
+                opt.classList.add('selected');
+                dd.classList.remove('open');
+                trigger.setAttribute('aria-expanded', 'false');
+            });
+        });
+    });
+    window.addEventListener('click', () => {
+        closeAllDropdowns();
+    });
+    window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closeAllDropdowns();
+        }
+    });
+}
+initHexDropdowns();
+// ============================================================================
 // WEBSOCKET NETWORKING & ROOM / PASSCODE / SHAREABLE LINK MANAGEMENT
 // ============================================================================
 function getShareableRoomUrl(includePasscode = true) {
@@ -1276,7 +1339,6 @@ function connectWebSocket() {
     state.ws = ws;
     ws.addEventListener('open', () => {
         state.connected = true;
-        void refreshRoomsList();
         // Check if URL has ?room=CODE (&pass=PASSCODE)
         const params = new URLSearchParams(window.location.search);
         const roomParam = params.get('room');
@@ -1321,7 +1383,6 @@ function updateLobbyDOM(lobby) {
     getEl('lobby-room-code').textContent = lobby.roomId;
     getEl('lobby-room-passcode').textContent = lobby.passcode ? lobby.passcode : 'NONE (OPEN)';
     getEl('lobby-share-url').textContent = getShareableRoomUrl(true);
-    getEl('hud-room-code-label').textContent = `ROOM: ${lobby.roomId}`;
     const p0 = lobby.players?.[0];
     const p1 = lobby.players?.[1];
     getEl('slot-0-name').textContent = p0
@@ -1508,56 +1569,6 @@ function handleServerMessage(msg) {
         updateInGameHud();
     }
 }
-async function refreshRoomsList() {
-    try {
-        const res = await fetch('/api/rooms');
-        const data = (await res.json());
-        const listEl = getEl('active-rooms-list');
-        if (!data.rooms || data.rooms.length === 0) {
-            listEl.innerHTML = `
-        <div class="room-list-item">
-          <div class="room-list-meta">
-            <strong>No active rooms yet</strong>
-            <small>Create a room on the left or start Instant 1v1 vs Bot!</small>
-          </div>
-        </div>
-      `;
-            return;
-        }
-        listEl.innerHTML = data.rooms
-            .map((r) => `
-      <div class="room-list-item">
-        <div class="room-list-meta">
-          <strong>${r.id} • ${r.hostName}'s Pit ${r.hasPasscode ? '🔒' : '🟢'}</strong>
-          <small>${r.playerCount}/2 Players • Best of ${r.bestOf} • ${r.state.toUpperCase()}</small>
-        </div>
-        <button class="hex-btn sm btn-quick-join" data-code="${r.id}" data-locked="${r.hasPasscode}">Join</button>
-      </div>
-    `)
-            .join('');
-        listEl.querySelectorAll('.btn-quick-join').forEach((btn) => {
-            btn.addEventListener('click', () => {
-                const code = btn.getAttribute('data-code') || '';
-                const locked = btn.getAttribute('data-locked') === 'true';
-                getEl('input-join-code').value = code;
-                const passInput = getEl('input-join-passcode');
-                if (locked && !passInput.value) {
-                    passInput.focus();
-                    showToast(`Enter the passcode for room ${code}`);
-                    return;
-                }
-                sendWs({
-                    type: 'join_room',
-                    roomId: code,
-                    passcode: passInput.value.trim(),
-                    name: getEl('input-player-name').value.trim() || 'Dr. Mundo',
-                    spells: state.mySpells
-                });
-            });
-        });
-    }
-    catch { }
-}
 // ============================================================================
 // UI BUTTON BINDINGS & PLAYER INPUTS (LEAGUE OF LEGENDS CONTROLS)
 // ============================================================================
@@ -1567,8 +1578,8 @@ getEl('btn-create-room').addEventListener('click', () => {
         type: 'create_room',
         name: getEl('input-player-name').value.trim() || 'Dr. Mundo',
         passcode: getEl('input-create-passcode').value.trim(),
-        bestOf: Number(getEl('select-best-of').value),
-        cooldownMode: getEl('select-cd-mode').value,
+        bestOf: Number(getDropdownValue('dropdown-best-of') || 3),
+        cooldownMode: (getDropdownValue('dropdown-cd-mode') || 'fast'),
         spells: state.mySpells,
         withBot: false
     });
@@ -1579,8 +1590,8 @@ getEl('btn-practice-bot').addEventListener('click', () => {
         type: 'create_room',
         name: getEl('input-player-name').value.trim() || 'Dr. Mundo',
         passcode: getEl('input-create-passcode').value.trim(),
-        bestOf: Number(getEl('select-best-of').value),
-        cooldownMode: getEl('select-cd-mode').value,
+        bestOf: Number(getDropdownValue('dropdown-best-of') || 3),
+        cooldownMode: (getDropdownValue('dropdown-cd-mode') || 'fast'),
         spells: state.mySpells,
         withBot: true
     });
@@ -1603,8 +1614,13 @@ getEl('btn-join-room').addEventListener('click', () => {
         spells: state.mySpells
     });
 });
-getEl('btn-refresh-rooms').addEventListener('click', () => {
-    void refreshRoomsList();
+getEl('input-join-code').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter')
+        getEl('btn-join-room').click();
+});
+getEl('input-join-passcode').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter')
+        getEl('btn-join-room').click();
 });
 getEl('btn-copy-share-link').addEventListener('click', async () => {
     const link = getShareableRoomUrl(true);
@@ -1616,11 +1632,6 @@ getEl('btn-copy-code-pass').addEventListener('click', async () => {
     const text = `Baron Pit Dr. Mundo 1v1 — Room Code: ${state.roomId}${state.passcode ? ` | Passcode: ${state.passcode}` : ''} | Link: ${linkNoPass}`;
     await navigator.clipboard.writeText(text).catch(() => { });
     showToast('Copied Room Code & Passcode details!');
-});
-getEl('btn-hud-copy-link').addEventListener('click', async () => {
-    const link = getShareableRoomUrl(true);
-    await navigator.clipboard.writeText(link).catch(() => { });
-    showToast('Copied Shareable Room Link!');
 });
 getEl('btn-toggle-bot').addEventListener('click', () => {
     sendWs({ type: 'toggle_bot' });
@@ -1637,9 +1648,6 @@ getEl('btn-start-match').addEventListener('click', () => {
 });
 getEl('btn-leave-room').addEventListener('click', () => {
     window.location.href = window.location.pathname;
-});
-getEl('btn-hud-lobby').addEventListener('click', () => {
-    sendWs({ type: 'return_to_lobby' });
 });
 getEl('btn-rematch').addEventListener('click', () => {
     getEl('gameover-modal').classList.add('hidden');
@@ -1797,7 +1805,6 @@ window.addEventListener('resize', () => {
 // INITIALIZE ASSETS & MAIN 60FPS RENDER LOOP
 // ============================================================================
 async function initAllAssets() {
-    const badge = getEl('model-load-status');
     try {
         await Promise.all([
             loadVfxTextures(),
@@ -1807,11 +1814,9 @@ async function initAllAssets() {
             mundoRigs[1].load()
         ]);
         state.assetsLoaded = true;
-        badge.textContent = 'LoL 3D Assets Ready ✓';
     }
     catch (err) {
         console.error('Error loading 3D assets:', err);
-        badge.textContent = '3D Assets Loaded';
     }
 }
 void initAllAssets();
