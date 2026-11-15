@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express';
+import fs from 'fs';
 import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -156,6 +157,7 @@ interface ServerPlayerState {
   emoteTimer: number;
   stats: PlayerMatchStats;
   aiState: BotAIState | null;
+  awaitingReconnect?: boolean;
 }
 
 interface ServerProjectile {
@@ -197,9 +199,97 @@ interface GameRoom {
   players: [ServerPlayerState | null, ServerPlayerState | null];
   projectiles: ServerProjectile[];
   events: GameEvent[];
+  restoredAt?: number;
 }
 
 const rooms = new Map<string, GameRoom>();
+
+const SNAPSHOT_PATH =
+  process.env.ROOMS_SNAPSHOT_PATH || path.join(PROJECT_ROOT, 'data', 'rooms-snapshot.json');
+const RESTORED_ROOM_TTL_MS = 5 * 60 * 1000;
+
+interface PersistedRoomsFile {
+  savedAt: number;
+  rooms: Array<Omit<GameRoom, 'clients' | 'events'>>;
+}
+
+function serializeRoomsForDisk(): string {
+  const list: Array<Omit<GameRoom, 'clients' | 'events'>> = [];
+  for (const room of rooms.values()) {
+    const { clients: _c, events: _e, ...rest } = room;
+    list.push(rest);
+  }
+  const payload: PersistedRoomsFile = { savedAt: Date.now(), rooms: list };
+  return JSON.stringify(payload);
+}
+
+let isSavingSnapshot = false;
+let lastSavedHadRooms = false;
+
+async function saveRoomsSnapshot(): Promise<void> {
+  if (isSavingSnapshot) return;
+  if (rooms.size === 0 && !lastSavedHadRooms) return;
+  isSavingSnapshot = true;
+  try {
+    await fs.promises.mkdir(path.dirname(SNAPSHOT_PATH), { recursive: true });
+    const tmpPath = `${SNAPSHOT_PATH}.tmp`;
+    await fs.promises.writeFile(tmpPath, serializeRoomsForDisk(), 'utf8');
+    await fs.promises.rename(tmpPath, SNAPSHOT_PATH);
+    lastSavedHadRooms = rooms.size > 0;
+  } catch (err) {
+    console.error('Failed to save rooms snapshot:', err);
+  } finally {
+    isSavingSnapshot = false;
+  }
+}
+
+function saveRoomsSnapshotSync(): void {
+  try {
+    fs.mkdirSync(path.dirname(SNAPSHOT_PATH), { recursive: true });
+    const tmpPath = `${SNAPSHOT_PATH}.tmp`;
+    fs.writeFileSync(tmpPath, serializeRoomsForDisk(), 'utf8');
+    fs.renameSync(tmpPath, SNAPSHOT_PATH);
+  } catch (err) {
+    console.error('Failed to save rooms snapshot on shutdown:', err);
+  }
+}
+
+function loadRoomsSnapshot(): void {
+  if (!fs.existsSync(SNAPSHOT_PATH)) return;
+  try {
+    const raw = fs.readFileSync(SNAPSHOT_PATH, 'utf8');
+    const parsed = JSON.parse(raw) as PersistedRoomsFile;
+    if (!parsed || !Array.isArray(parsed.rooms)) return;
+    const now = Date.now();
+    for (const saved of parsed.rooms) {
+      if (!saved || !saved.id) continue;
+      if (now - (parsed.savedAt || 0) > RESTORED_ROOM_TTL_MS) continue;
+      const players: [ServerPlayerState | null, ServerPlayerState | null] = [
+        saved.players?.[0] || null,
+        saved.players?.[1] || null
+      ];
+      for (const p of players) {
+        if (p && !p.isBot) {
+          p.awaitingReconnect = true;
+        }
+      }
+      rooms.set(saved.id, {
+        ...saved,
+        clients: [],
+        events: [],
+        players,
+        projectiles: Array.isArray(saved.projectiles) ? saved.projectiles : [],
+        restoredAt: now
+      });
+    }
+    if (rooms.size > 0) {
+      lastSavedHadRooms = true;
+      console.log(`Restored ${rooms.size} room(s) from snapshot.`);
+    }
+  } catch (err) {
+    console.error('Failed to load rooms snapshot:', err);
+  }
+}
 
 app.get('/api/rooms', (_req: Request, res: Response) => {
   const list: RoomSummary[] = [];
@@ -860,6 +950,7 @@ function buildStateSnapshot(room: GameRoom): ServerToClientMessage {
 
 setInterval(() => {
   for (const room of rooms.values()) {
+    if (room.clients.length === 0) continue;
     if (room.state === 'round_end') {
       room.roundEndTimer -= DT;
       if (room.roundEndTimer <= 0) {
@@ -1026,6 +1117,43 @@ wss.on('connection', (ws: WebSocket) => {
       }
 
       leaveCurrentRoom(client);
+
+      // Reclaim a disconnected slot from a server-restart snapshot if available
+      const requestedName = (msg.name || '').trim().slice(0, 20);
+      let reclaimSlot: 0 | 1 | -1 = -1;
+      for (const s of [0, 1] as const) {
+        const p = room.players[s];
+        if (p && !p.isBot && p.awaitingReconnect) {
+          if (requestedName && p.name === requestedName) {
+            reclaimSlot = s;
+            break;
+          }
+          if (reclaimSlot === -1) reclaimSlot = s;
+        }
+      }
+
+      if (reclaimSlot !== -1) {
+        const reclaimed = room.players[reclaimSlot]!;
+        reclaimed.awaitingReconnect = false;
+        if (requestedName) reclaimed.name = requestedName;
+        client.roomId = roomId;
+        client.slot = reclaimSlot;
+        room.clients.push(client);
+        room.restoredAt = undefined;
+
+        sendClientMessage(ws, {
+          type: 'joined_room',
+          roomId,
+          slot: reclaimSlot,
+          passcode: room.passcode,
+          lobby: serializeRoomLobby(room)
+        });
+        broadcastToRoom(room, serializeRoomLobby(room));
+        if (room.state !== 'lobby') {
+          sendClientMessage(ws, buildStateSnapshot(room));
+        }
+        return;
+      }
 
       // Assign open slot (if slot 1 was a Bot, replace the Bot with the human joiner!)
       let assignedSlot: 0 | 1 | -1 = -1;
@@ -1284,6 +1412,26 @@ function leaveCurrentRoom(client: ConnectedClient): void {
   room.projectiles = [];
   broadcastToRoom(room, serializeRoomLobby(room));
 }
+
+setInterval(() => {
+  void saveRoomsSnapshot();
+  const now = Date.now();
+  for (const [id, room] of rooms.entries()) {
+    if (room.clients.length === 0 && room.restoredAt && now - room.restoredAt > RESTORED_ROOM_TTL_MS) {
+      rooms.delete(id);
+    }
+  }
+}, 2000);
+
+function handleShutdown(): void {
+  saveRoomsSnapshotSync();
+  process.exit(0);
+}
+
+process.on('SIGINT', handleShutdown);
+process.on('SIGTERM', handleShutdown);
+
+loadRoomsSnapshot();
 
 const PORT = Number(process.env.PORT) || 3000;
 server.listen(PORT, () => {
