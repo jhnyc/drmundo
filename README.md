@@ -2,6 +2,8 @@
 
 Opening the League client for a quick Dr. Mundo 1v1 is way too slow. Skip the queue, throw cleavers in the Baron pit right from your browser, and find out who's the juke master.
 
+![Baron Pit Dr. Mundo 1v1 in-game screenshot](screenshot.png)
+
 ## Stack
 
 - **Frontend:** TypeScript, Three.js (3D graphics & animations), HTML/CSS
