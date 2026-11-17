@@ -5,7 +5,7 @@ import { bindSpellPickerEvents, getDropdownValue, initChampionPicker, initHexDro
 import { connectWebSocket, getShareableRoomUrl, sendWs } from './network.js';
 import { MAX_RENDER_PIXEL_RATIO, buildBaronPitEnvironment, camera, groundRayPlane, loadVfxTextures, raycaster, renderer, scene, updateCameraTransform, voidParticles, wardMixers } from './scene.js';
 import { getEl, state } from './state.js';
-import { loadChampionVfxTextures, spawnGhostTrailStep, spawnMoveClickIndicator, syncGroundZones, syncProjectiles, updateSkillshotIndicator, updateTransientVfx } from './vfx.js';
+import { loadChampionVfxTextures, prewarmAllVfxShaders, spawnGhostTrailStep, spawnMoveClickIndicator, syncGroundZones, syncProjectiles, updateSkillshotIndicator, updateTransientVfx } from './vfx.js';
 // ============================================================================
 // UI INITIALIZATION & LOBBY BUTTON BINDINGS
 // ============================================================================
@@ -282,6 +282,7 @@ async function initAllAssets() {
             championRigs[0].load(state.myChampionId),
             championRigs[1].load(state.myChampionId)
         ]);
+        prewarmAllVfxShaders();
         state.assetsLoaded = true;
     }
     catch (err) {
@@ -311,15 +312,8 @@ function animate(now) {
         m.update(dt);
     }
     if (voidParticles) {
-        const pos = voidParticles.geometry.attributes.position;
-        for (let i = 0; i < pos.count; i++) {
-            let y = pos.getY(i) + dt * 14;
-            if (y > 165)
-                y = 10;
-            pos.setY(i, y);
-        }
-        pos.needsUpdate = true;
         voidParticles.rotation.y += dt * 0.04;
+        voidParticles.position.y = Math.sin(now * 0.0008) * 14;
     }
     if (state.roomState === 'lobby' && !state.serverPlayers[0] && !state.serverPlayers[1]) {
         championRigs[0].update(dt, {

@@ -29,6 +29,7 @@ import {
 import { getEl, state } from './state.js';
 import {
   loadChampionVfxTextures,
+  prewarmAllVfxShaders,
   spawnGhostTrailStep,
   spawnMoveClickIndicator,
   syncGroundZones,
@@ -337,6 +338,7 @@ async function initAllAssets(): Promise<void> {
       championRigs[0].load(state.myChampionId),
       championRigs[1].load(state.myChampionId)
     ]);
+    prewarmAllVfxShaders();
     state.assetsLoaded = true;
   } catch (err) {
     console.error('Error loading 3D assets:', err);
@@ -370,14 +372,8 @@ function animate(now: number): void {
   }
 
   if (voidParticles) {
-    const pos = voidParticles.geometry.attributes.position as THREE.BufferAttribute;
-    for (let i = 0; i < pos.count; i++) {
-      let y = pos.getY(i) + dt * 14;
-      if (y > 165) y = 10;
-      pos.setY(i, y);
-    }
-    pos.needsUpdate = true;
     voidParticles.rotation.y += dt * 0.04;
+    voidParticles.position.y = Math.sin(now * 0.0008) * 14;
   }
 
   if (state.roomState === 'lobby' && !state.serverPlayers[0] && !state.serverPlayers[1]) {

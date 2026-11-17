@@ -96,13 +96,13 @@ export class ChampionRig {
             if (child.isMesh) {
                 const mesh = child;
                 mesh.frustumCulled = false;
-                mesh.castShadow = true;
+                mesh.castShadow = false;
                 mesh.receiveShadow = false;
                 if (mesh.material && !Array.isArray(mesh.material)) {
                     const mat = mesh.material.clone();
                     mat.side = THREE.DoubleSide;
+                    mat.forceSinglePass = true;
                     mesh.material = mat;
-                    mesh.receiveShadow = mat.type !== 'MeshBasicMaterial';
                     const ud = (mat.userData || {});
                     if (ud.visible === false) {
                         mesh.visible = false;
@@ -205,7 +205,7 @@ export class ChampionRig {
         const diffAngle = Math.atan2(Math.sin(serverPlayer.angle - this.root.rotation.y), Math.cos(serverPlayer.angle - this.root.rotation.y));
         this.root.rotation.y += diffAngle * Math.min(1, dt * 18);
         if (this.model && this.pelvisNode) {
-            this.root.updateMatrixWorld(true);
+            this.pelvisNode.updateWorldMatrix(true, false);
             this.pelvisNode.getWorldPosition(_pelvisWorld);
             this.root.worldToLocal(_pelvisWorld);
             const factor = this.config.model.pelvisRootMotionFactor;
@@ -339,15 +339,11 @@ export async function loadProjectileTemplate(visual) {
                 if (child.isMesh) {
                     const mesh = child;
                     mesh.geometry.center();
-                    mesh.material = new THREE.MeshStandardMaterial({
+                    mesh.material = new THREE.MeshBasicMaterial({
                         map: weaponTex,
-                        roughness: 0.3,
-                        metalness: 0.55,
-                        emissive: new THREE.Color(visual.emissiveHex),
-                        emissiveIntensity: visual.emissiveIntensity,
+                        color: 0xe6fff0,
                         side: THREE.DoubleSide
                     });
-                    mesh.castShadow = true;
                 }
             });
             weaponObj.scale.setScalar(visual.scale);
@@ -403,19 +399,14 @@ export async function loadZoneMeshTemplate(vis) {
             spikeObj.traverse((child) => {
                 if (child.isMesh) {
                     const mesh = child;
-                    mesh.material = new THREE.MeshStandardMaterial({
+                    mesh.material = new THREE.MeshBasicMaterial({
                         map: spikeTex,
                         color: vis.spikeColorHex,
-                        emissive: new THREE.Color(vis.eruptColorHex),
-                        emissiveIntensity: 0.22,
-                        roughness: 0.45,
-                        metalness: 0.2,
                         side: THREE.DoubleSide,
+                        forceSinglePass: true,
                         transparent: true,
                         opacity: 1
                     });
-                    mesh.castShadow = true;
-                    mesh.receiveShadow = true;
                 }
             });
             group.add(spikeObj);

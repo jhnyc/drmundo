@@ -3,10 +3,11 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { INV_SQRT2, LOL_SCALE, PIT_RADIUS, getEl, state } from './state.js';
 
 const container = getEl<HTMLDivElement>('game-canvas-container');
-export const MAX_RENDER_PIXEL_RATIO = 1.5;
+export const MAX_RENDER_PIXEL_RATIO = window.innerWidth * window.innerHeight > 1_400_000 ? 1.0 : 1.25;
 export const renderer = new THREE.WebGLRenderer({
   antialias: true,
   powerPreference: 'high-performance'
@@ -16,8 +17,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.shadowMap.enabled = false;
 container.appendChild(renderer.domElement);
 
 export const scene = new THREE.Scene();
@@ -56,16 +56,6 @@ scene.add(ambientLight);
 
 const dirLight = new THREE.DirectionalLight(0xfff4e0, 1.85);
 dirLight.position.set(-700, 1900, 950);
-dirLight.castShadow = true;
-dirLight.shadow.mapSize.set(1024, 1024);
-dirLight.shadow.camera.near = 200;
-dirLight.shadow.camera.far = 4500;
-const dCam = 1350;
-dirLight.shadow.camera.left = -dCam;
-dirLight.shadow.camera.right = dCam;
-dirLight.shadow.camera.top = dCam;
-dirLight.shadow.camera.bottom = -dCam;
-dirLight.shadow.bias = -0.0005;
 scene.add(dirLight);
 
 const baronVoidLight = new THREE.PointLight(0xb24bf3, 3.2, 1650, 1.4);
@@ -143,7 +133,8 @@ export async function buildBaronPitEnvironment(): Promise<void> {
   arenaGroup.add(groundMesh);
 
   try {
-    const [sightWardObj, sightWardTex] = await Promise.all([
+    const [cwGltf, sightWardObj, sightWardTex] = await Promise.all([
+      gltfLoader.loadAsync('/assets/models/jammerdevice.glb'),
       objLoader.loadAsync('/assets/models/sightward.obj'),
       textureLoader.loadAsync('/assets/models/sightward_tx.png')
     ]);
@@ -152,14 +143,20 @@ export async function buildBaronPitEnvironment(): Promise<void> {
     sightWardObj.traverse((child: THREE.Object3D) => {
       if ((child as THREE.Mesh).isMesh) {
         const mesh = child as THREE.Mesh;
-        mesh.material = new THREE.MeshStandardMaterial({
+        mesh.material = new THREE.MeshLambertMaterial({
           map: sightWardTex,
-          roughness: 0.6,
-          metalness: 0.2,
           side: THREE.DoubleSide
         });
-        mesh.castShadow = true;
       }
+    });
+
+    const wardShadowGeo = new THREE.CircleGeometry(24, 16);
+    wardShadowGeo.rotateX(-Math.PI / 2);
+    const wardShadowMat = new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity: 0.36,
+      depthWrite: false
     });
 
     const wardOffsets = [-640, -425, -215, 0, 215, 425, 640];
@@ -168,9 +165,12 @@ export async function buildBaronPitEnvironment(): Promise<void> {
       const wx = -t * INV_SQRT2;
       const wz = t * INV_SQRT2;
 
+      const wardShadow = new THREE.Mesh(wardShadowGeo, wardShadowMat);
+      wardShadow.position.set(wx, 1.5, wz);
+      arenaGroup.add(wardShadow);
+
       if (i % 2 === 0) {
-        const cwGltf = await gltfLoader.loadAsync('/assets/models/jammerdevice.glb');
-        const cw = cwGltf.scene;
+        const cw = cloneSkinned(cwGltf.scene);
         cw.scale.setScalar(LOL_SCALE * 0.95);
         cw.position.set(wx, 2, wz);
         cw.rotation.y = Math.PI / 4;
@@ -180,7 +180,6 @@ export async function buildBaronPitEnvironment(): Promise<void> {
             if (!Array.isArray(mesh.material)) {
               mesh.material.side = THREE.DoubleSide;
             }
-            mesh.castShadow = true;
             mesh.frustumCulled = false;
           }
         });

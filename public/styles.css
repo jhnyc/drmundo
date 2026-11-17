@@ -101,8 +101,7 @@ button, input, select, .clickable {
   transform: translate(-50%, -100%);
   width: 152px;
   pointer-events: none;
-  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.85));
-  transition: opacity 0.15s ease;
+  will-change: transform;
 }
 
 .fhb-name {
@@ -1138,7 +1137,6 @@ button, input, select, .clickable {
   align-items: flex-end;
   gap: 0;
   pointer-events: auto;
-  filter: drop-shadow(0 -4px 18px rgba(0, 0, 0, 0.8));
 }
 
 /* Left panel: stat grid + circular portrait with level badge */

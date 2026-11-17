@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CHAMPION_LIST, getChampionConfig } from '../shared/champions/index.js';
 import { championRigs, getCachedProjectileTemplate, getCachedZoneMeshTemplate } from './champion.js';
-import { scene, textureLoader, vfxTextures } from './scene.js';
+import { camera, renderer, scene, textureLoader, vfxTextures } from './scene.js';
 import { state } from './state.js';
 const activeProjectileMeshes = new Map();
 const activeGroundZoneMeshes = new Map();
@@ -10,7 +10,62 @@ const seenProjIds = new Set();
 const seenZoneIds = new Set();
 // Cached champion VFX textures keyed by URL
 const champTextureCache = new Map();
-const rockShardSubTextures = [];
+// Retain prewarmed materials so Three.js WebGLPrograms refcounts stay > 0 permanently
+const prewarmedVfxMats = [];
+/**
+ * Create a single-pass transparent MeshBasicMaterial so DoubleSide VFX quads
+ * never trigger Three.js two-pass BackSide/FrontSide shader splits at runtime.
+ */
+function createVfxBasicMat(params) {
+    return new THREE.MeshBasicMaterial({
+        transparent: true,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        forceSinglePass: true,
+        ...params
+    });
+}
+// Single pooled THREE.Points particle system for all rock debris (1 draw call, zero allocations)
+const MAX_DEBRIS = 96;
+const debrisPositions = new Float32Array(MAX_DEBRIS * 3);
+const debrisVelocities = new Float32Array(MAX_DEBRIS * 3);
+const debrisAges = new Float32Array(MAX_DEBRIS);
+const debrisDurations = new Float32Array(MAX_DEBRIS);
+let debrisActiveCount = 0;
+for (let i = 0; i < MAX_DEBRIS; i++) {
+    debrisPositions[i * 3 + 1] = -9999;
+}
+const debrisGeo = new THREE.BufferGeometry();
+const debrisPosAttr = new THREE.BufferAttribute(debrisPositions, 3);
+debrisPosAttr.setUsage(THREE.DynamicDrawUsage);
+debrisGeo.setAttribute('position', debrisPosAttr);
+const debrisMat = new THREE.PointsMaterial({
+    color: 0xc2b0d8,
+    size: 26,
+    sizeAttenuation: true,
+    transparent: true,
+    opacity: 0.9,
+    depthWrite: false
+});
+const debrisPoints = new THREE.Points(debrisGeo, debrisMat);
+debrisPoints.frustumCulled = false;
+debrisPoints.visible = false;
+scene.add(debrisPoints);
+function extractTopLeftShardTexture(sourceTex) {
+    const img = sourceTex.image;
+    if (!img || !img.width || !img.height)
+        return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    if (!ctx)
+        return null;
+    ctx.drawImage(img, 0, 0, img.width / 2, img.height / 2, 0, 0, 64, 64);
+    const cropped = new THREE.CanvasTexture(canvas);
+    cropped.colorSpace = THREE.SRGBColorSpace;
+    return cropped;
+}
 export async function loadChampionVfxTextures() {
     const urls = new Set();
     for (const champ of CHAMPION_LIST) {
@@ -33,15 +88,11 @@ export async function loadChampionVfxTextures() {
             const tex = await textureLoader.loadAsync(url);
             tex.colorSpace = THREE.SRGBColorSpace;
             champTextureCache.set(url, tex);
-            if (url.includes('rockshards') && rockShardSubTextures.length === 0) {
-                for (let row = 0; row < 2; row++) {
-                    for (let col = 0; col < 2; col++) {
-                        const sub = tex.clone();
-                        sub.repeat.set(0.5, 0.5);
-                        sub.offset.set(col * 0.5, row * 0.5);
-                        sub.needsUpdate = true;
-                        rockShardSubTextures.push(sub);
-                    }
+            if (url.includes('rockshards') && !debrisMat.map) {
+                const singleTile = extractTopLeftShardTexture(tex);
+                if (singleTile) {
+                    debrisMat.map = singleTile;
+                    debrisMat.needsUpdate = true;
                 }
             }
         }
@@ -129,12 +180,9 @@ export function syncProjectiles(dt) {
                 spinner = new THREE.Mesh(sharedProjFallbackGeo, fallbackMat);
             }
             meshGroup.add(spinner);
-            const ringMat = new THREE.MeshBasicMaterial({
+            const ringMat = createVfxBasicMat({
                 color: proj.ownerSlot === state.mySlot ? 0x26a9ff : 0xff4254,
-                transparent: true,
-                opacity: 0.55,
-                side: THREE.DoubleSide,
-                depthWrite: false
+                opacity: 0.55
             });
             materials.push(ringMat);
             const groundRing = new THREE.Mesh(sharedUnitRingGeo, ringMat);
@@ -176,14 +224,11 @@ export function spawnCastAuraVfx(championId, x, z) {
         spawnRingBurstVfx(x, z, champ.accentHex, 30, 120, 0.3);
         return;
     }
-    const mat = new THREE.MeshBasicMaterial({
+    const mat = createVfxBasicMat({
         map: auraTex,
         color: champ.q.zoneVisual.eruptColorHex,
-        transparent: true,
         opacity: 0.85,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
+        blending: THREE.AdditiveBlending
     });
     const mesh = new THREE.Mesh(sharedZoneDecalGeo, mat);
     mesh.position.set(x, 4, z);
@@ -203,38 +248,51 @@ export function spawnCastAuraVfx(championId, x, z) {
         }
     });
 }
-function spawnRockDebrisParticle(x, y, z, vx, vy, vz, size, duration) {
-    const tex = rockShardSubTextures.length > 0
-        ? rockShardSubTextures[Math.floor(Math.random() * rockShardSubTextures.length)]
-        : undefined;
-    const mat = new THREE.SpriteMaterial({
-        map: tex,
-        color: 0xc2b0d8,
-        transparent: true,
-        opacity: 0.92,
-        depthWrite: false
-    });
-    const sprite = new THREE.Sprite(mat);
-    sprite.position.set(x, y, z);
-    sprite.scale.setScalar(size);
-    scene.add(sprite);
-    let curVy = vy;
-    transientVfx.push({
-        mesh: sprite,
-        age: 0,
-        duration,
-        update(dt) {
-            const t = this.age / this.duration;
-            curVy -= 420 * dt;
-            sprite.position.x += vx * dt;
-            sprite.position.y = Math.max(4, sprite.position.y + curVy * dt);
-            sprite.position.z += vz * dt;
-            mat.opacity = 0.92 * (1 - Math.pow(t, 1.5));
-        },
-        onDispose() {
-            mat.dispose();
+function spawnRockDebrisParticle(x, y, z, vx, vy, vz, _size, duration) {
+    for (let i = 0; i < MAX_DEBRIS; i++) {
+        if (debrisDurations[i] <= 0) {
+            const idx = i * 3;
+            debrisPositions[idx] = x;
+            debrisPositions[idx + 1] = y;
+            debrisPositions[idx + 2] = z;
+            debrisVelocities[idx] = vx;
+            debrisVelocities[idx + 1] = vy;
+            debrisVelocities[idx + 2] = vz;
+            debrisAges[i] = 0;
+            debrisDurations[i] = duration;
+            debrisActiveCount += 1;
+            debrisPoints.visible = true;
+            debrisPosAttr.needsUpdate = true;
+            return;
         }
-    });
+    }
+}
+function updateRockDebrisPool(dt) {
+    if (debrisActiveCount === 0)
+        return;
+    let active = 0;
+    for (let i = 0; i < MAX_DEBRIS; i++) {
+        const dur = debrisDurations[i];
+        if (dur <= 0)
+            continue;
+        debrisAges[i] += dt;
+        const idx = i * 3;
+        if (debrisAges[i] >= dur) {
+            debrisDurations[i] = 0;
+            debrisPositions[idx + 1] = -9999;
+            continue;
+        }
+        active += 1;
+        debrisVelocities[idx + 1] -= 420 * dt;
+        debrisPositions[idx] += debrisVelocities[idx] * dt;
+        debrisPositions[idx + 1] = Math.max(4, debrisPositions[idx + 1] + debrisVelocities[idx + 1] * dt);
+        debrisPositions[idx + 2] += debrisVelocities[idx + 2] * dt;
+    }
+    debrisActiveCount = active;
+    debrisPosAttr.needsUpdate = true;
+    if (active === 0) {
+        debrisPoints.visible = false;
+    }
 }
 export function syncGroundZones(dt) {
     seenZoneIds.clear();
@@ -251,13 +309,10 @@ export function syncGroundZones(dt) {
             const teamColor = isAlly ? 0x26a9ff : 0xff2b3d;
             // 1. Official Riot ground crack fissures decal (blended dark into pit floor)
             const crackTex = zv?.crackTextureUrl ? champTextureCache.get(zv.crackTextureUrl) : undefined;
-            const crackMat = new THREE.MeshBasicMaterial({
+            const crackMat = createVfxBasicMat({
                 map: crackTex || undefined,
                 color: isAlly ? 0x6f558f : 0x804658,
-                transparent: true,
-                opacity: 0.72,
-                side: THREE.DoubleSide,
-                depthWrite: false
+                opacity: 0.72
             });
             materials.push(crackMat);
             const crackMesh = new THREE.Mesh(sharedZoneDecalGeo, crackMat);
@@ -267,14 +322,11 @@ export function syncGroundZones(dt) {
             // 2. Official Riot indicator rim glow cylinder + crisp outer team circle
             const indTex = zv?.indicatorTextureUrl ? champTextureCache.get(zv.indicatorTextureUrl) : undefined;
             if (indTex) {
-                const indMat = new THREE.MeshBasicMaterial({
+                const indMat = createVfxBasicMat({
                     map: indTex,
                     color: isAlly ? 0x9b6eff : 0xff3048,
-                    transparent: true,
                     opacity: 0.95,
-                    side: THREE.DoubleSide,
-                    blending: THREE.AdditiveBlending,
-                    depthWrite: false
+                    blending: THREE.AdditiveBlending
                 });
                 materials.push(indMat);
                 const indRim = new THREE.Mesh(sharedZoneRimCylinderGeo, indMat);
@@ -282,12 +334,9 @@ export function syncGroundZones(dt) {
                 indRim.position.y = 8;
                 group.add(indRim);
             }
-            const outerMat = new THREE.MeshBasicMaterial({
+            const outerMat = createVfxBasicMat({
                 color: teamColor,
-                transparent: true,
-                opacity: 0.92,
-                side: THREE.DoubleSide,
-                depthWrite: false
+                opacity: 0.92
             });
             materials.push(outerMat);
             const outerRing = new THREE.Mesh(sharedZoneOuterRingGeo, outerMat);
@@ -295,13 +344,10 @@ export function syncGroundZones(dt) {
             outerRing.position.y = 1.2;
             group.add(outerRing);
             // 3. Expanding detonation timer fill
-            const fillMat = new THREE.MeshBasicMaterial({
+            const fillMat = createVfxBasicMat({
                 color: isAlly ? 0x6236ff : 0xff1e3c,
-                transparent: true,
                 opacity: 0.22,
-                side: THREE.DoubleSide,
-                blending: THREE.AdditiveBlending,
-                depthWrite: false
+                blending: THREE.AdditiveBlending
             });
             materials.push(fillMat);
             const fillMesh = new THREE.Mesh(sharedZoneFillGeo, fillMat);
@@ -341,13 +387,10 @@ export function spawnZoneEruptionVfx(championId, x, z, radius) {
     // 1. Lingering shattered ground crack crater
     const crackTex = zv?.crackTextureUrl ? champTextureCache.get(zv.crackTextureUrl) : undefined;
     if (crackTex) {
-        const craterMat = new THREE.MeshBasicMaterial({
+        const craterMat = createVfxBasicMat({
             map: crackTex,
             color: 0x735b8a,
-            transparent: true,
-            opacity: 0.8,
-            side: THREE.DoubleSide,
-            depthWrite: false
+            opacity: 0.8
         });
         const crater = new THREE.Mesh(sharedZoneDecalGeo, craterMat);
         crater.position.set(x, 2.5, z);
@@ -443,24 +486,19 @@ export function spawnZoneEruptionVfx(championId, x, z, radius) {
                 m.dispose();
         }
     });
-    // 3. Official Riot Void smoke rays shooting up from the rupture
+    // 3. Official Riot Void smoke rays shooting up from the rupture (single shared material)
     const smokeTex = zv?.smokeTextureUrl ? champTextureCache.get(zv.smokeTextureUrl) : undefined;
     if (smokeTex) {
         const smokeGroup = new THREE.Group();
         smokeGroup.position.set(x, 0, z);
-        const smokeMats = [];
+        const smokeMat = createVfxBasicMat({
+            map: smokeTex,
+            color: eruptColor,
+            opacity: 0.72,
+            blending: THREE.AdditiveBlending
+        });
         for (let i = 0; i < 3; i++) {
-            const sMat = new THREE.MeshBasicMaterial({
-                map: smokeTex,
-                color: eruptColor,
-                transparent: true,
-                opacity: 0.72,
-                side: THREE.DoubleSide,
-                blending: THREE.AdditiveBlending,
-                depthWrite: false
-            });
-            smokeMats.push(sMat);
-            const plane = new THREE.Mesh(sharedSmokeRayGeo, sMat);
+            const plane = new THREE.Mesh(sharedSmokeRayGeo, smokeMat);
             plane.rotation.y = (i * Math.PI) / 3;
             plane.scale.set(radius * 1.4, radius * 1.35, 1);
             smokeGroup.add(plane);
@@ -473,13 +511,10 @@ export function spawnZoneEruptionVfx(championId, x, z, radius) {
             update() {
                 const t = this.age / this.duration;
                 smokeGroup.scale.set(1 + t * 0.25, 1 + t * 0.35, 1 + t * 0.25);
-                for (const m of smokeMats) {
-                    m.opacity = 0.72 * Math.pow(1 - t, 1.4);
-                }
+                smokeMat.opacity = 0.72 * Math.pow(1 - t, 1.4);
             },
             onDispose() {
-                for (const m of smokeMats)
-                    m.dispose();
+                smokeMat.dispose();
             }
         });
     }
@@ -491,13 +526,10 @@ export function spawnZoneEruptionVfx(championId, x, z, radius) {
     }
 }
 export function spawnRingBurstVfx(x, z, colorHex, startR = 20, endR = 135, duration = 0.42) {
-    const mat = new THREE.MeshBasicMaterial({
+    const mat = createVfxBasicMat({
         color: colorHex,
-        transparent: true,
         opacity: 0.9,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
+        blending: THREE.AdditiveBlending
     });
     const mesh = new THREE.Mesh(sharedRingBurstGeo, mat);
     mesh.position.set(x, 6, z);
@@ -588,13 +620,10 @@ export function spawnMoveClickIndicator(x, z) {
     const { geo, tex } = getMoveArrowAssets();
     const group = new THREE.Group();
     group.position.set(x, 2, z);
-    const mat = new THREE.MeshBasicMaterial({
+    const mat = createVfxBasicMat({
         map: tex,
         color: 0xffffff,
-        transparent: true,
-        opacity: 0.96,
-        side: THREE.DoubleSide,
-        depthWrite: false
+        opacity: 0.96
     });
     const angles = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
     for (const ang of angles) {
@@ -626,14 +655,11 @@ function createSkybeamMesh(x, z, colorHex, width, height) {
     const mats = [];
     const angles = [0, Math.PI / 3, (2 * Math.PI) / 3];
     for (const ang of angles) {
-        const mat = new THREE.MeshBasicMaterial({
+        const mat = createVfxBasicMat({
             map: vfxTextures.skybeamGlow || undefined,
             color: colorHex,
-            transparent: true,
             opacity: 0.92,
-            side: THREE.DoubleSide,
-            blending: THREE.AdditiveBlending,
-            depthWrite: false
+            blending: THREE.AdditiveBlending
         });
         const plane = new THREE.Mesh(sharedSkybeamGeo, mat);
         plane.scale.set(width, height, 1);
@@ -698,22 +724,18 @@ function spawnFlashBurstAtPoint(x, z, isDestination) {
     });
     const burstGroup = new THREE.Group();
     burstGroup.position.set(x, 4, z);
-    const haloMat = new THREE.MeshBasicMaterial({
+    const haloMat = createVfxBasicMat({
         map: vfxTextures.flashHalo || vfxTextures.flashBurst || undefined,
         color: 0xffb82e,
-        transparent: true,
         opacity: 0.9,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
+        blending: THREE.AdditiveBlending
     });
     burstGroup.add(new THREE.Mesh(sharedFlashHaloGeo, haloMat));
-    const starMat = new THREE.MeshBasicMaterial({
+    const starMat = createVfxBasicMat({
         map: vfxTextures.flashBurst || undefined,
         color: 0xfff59e,
-        transparent: true,
         opacity: 0.98,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
+        blending: THREE.AdditiveBlending
     });
     const starMesh = new THREE.Mesh(sharedFlashStarGeo, starMat);
     starMesh.position.y = 2;
@@ -773,37 +795,28 @@ export function spawnHealVfx(slot, x, z) {
     }
     const healGroup = new THREE.Group();
     healGroup.position.set(x, 5, z);
-    const burstMat1 = new THREE.MeshBasicMaterial({
+    const burstMat1 = createVfxBasicMat({
         map: vfxTextures.flashBurst || undefined,
         color: 0x2eff5e,
-        transparent: true,
         opacity: 0.95,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
+        blending: THREE.AdditiveBlending
     });
     const burstMesh1 = new THREE.Mesh(sharedHealBurst1Geo, burstMat1);
     healGroup.add(burstMesh1);
-    const burstMat2 = new THREE.MeshBasicMaterial({
+    const burstMat2 = createVfxBasicMat({
         map: vfxTextures.flashBurst || undefined,
         color: 0x7dffaa,
-        transparent: true,
         opacity: 0.88,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
+        blending: THREE.AdditiveBlending
     });
     const burstMesh2 = new THREE.Mesh(sharedHealBurst2Geo, burstMat2);
     burstMesh2.position.y = 2;
     healGroup.add(burstMesh2);
-    const boltMat = new THREE.MeshBasicMaterial({
+    const boltMat = createVfxBasicMat({
         map: vfxTextures.healBolts || vfxTextures.healWisps || undefined,
         color: 0x39ff7a,
-        transparent: true,
         opacity: 0.9,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
+        blending: THREE.AdditiveBlending
     });
     const boltCylinder = new THREE.Mesh(sharedHealBoltGeo, boltMat);
     boltCylinder.position.y = 48;
@@ -841,14 +854,11 @@ export function spawnHealVfx(slot, x, z) {
 export function spawnGhostVfx(_slot, x, z) {
     const group = new THREE.Group();
     group.position.set(x, 65, z);
-    const cylMat = new THREE.MeshBasicMaterial({
+    const cylMat = createVfxBasicMat({
         map: vfxTextures.hasteShockwave || vfxTextures.ghostTrail || undefined,
         color: 0x22d8ff,
-        transparent: true,
         opacity: 0.92,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
+        blending: THREE.AdditiveBlending
     });
     const shockMesh = new THREE.Mesh(sharedGhostCylGeo, cylMat);
     group.add(shockMesh);
@@ -873,14 +883,11 @@ export function spawnGhostTrailStep(x, z, facingAngle) {
     const backZ = -Math.cos(facingAngle);
     const sideX = Math.cos(facingAngle);
     const sideZ = -Math.sin(facingAngle);
-    const ribbonMat = new THREE.MeshBasicMaterial({
+    const ribbonMat = createVfxBasicMat({
         map: vfxTextures.ghostTrail || vfxTextures.hasteShockwave || undefined,
         color: 0x24c8ff,
-        transparent: true,
         opacity: 0.68,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
+        blending: THREE.AdditiveBlending
     });
     const ribbon = new THREE.Mesh(sharedGhostRibbonGeo, ribbonMat);
     const lateralOffset = (Math.random() - 0.5) * 48;
@@ -937,6 +944,7 @@ export function spawnGhostTrailStep(x, z, facingAngle) {
     });
 }
 export function updateTransientVfx(dt) {
+    updateRockDebrisPool(dt);
     for (let i = transientVfx.length - 1; i >= 0; i--) {
         const vfx = transientVfx[i];
         vfx.age += dt;
@@ -950,18 +958,94 @@ export function updateTransientVfx(dt) {
         }
     }
 }
+/**
+ * Compile and keep alive all VFX shader programs + GPU textures during startup
+ * loading so casting abilities or summoner spells never triggers mid-match stutters.
+ */
+export function prewarmAllVfxShaders() {
+    if (prewarmedVfxMats.length > 0)
+        return;
+    for (const tex of Object.values(vfxTextures)) {
+        if (tex)
+            renderer.initTexture(tex);
+    }
+    for (const tex of champTextureCache.values()) {
+        renderer.initTexture(tex);
+    }
+    const warmupGroup = new THREE.Group();
+    warmupGroup.position.set(0, 5, 0);
+    warmupGroup.scale.setScalar(0.0001);
+    const basicNormal = createVfxBasicMat({
+        map: vfxTextures.flashBurst || undefined
+    });
+    const basicAdd = createVfxBasicMat({
+        map: vfxTextures.skybeamGlow || undefined,
+        blending: THREE.AdditiveBlending
+    });
+    const basicAddSolid = createVfxBasicMat({
+        color: 0xffffff,
+        blending: THREE.AdditiveBlending
+    });
+    const basicSolidRing = createVfxBasicMat({
+        color: 0xffffff
+    });
+    const spriteAdd = new THREE.SpriteMaterial({
+        map: vfxTextures.flashSpark || undefined,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+    });
+    prewarmedVfxMats.push(basicNormal, basicAdd, basicAddSolid, basicSolidRing, spriteAdd);
+    warmupGroup.add(new THREE.Mesh(sharedZoneDecalGeo, basicNormal));
+    warmupGroup.add(new THREE.Mesh(sharedSmokeRayGeo, basicAdd));
+    warmupGroup.add(new THREE.Mesh(sharedZoneFillGeo, basicAddSolid));
+    warmupGroup.add(new THREE.Mesh(sharedRingBurstGeo, basicSolidRing));
+    warmupGroup.add(new THREE.Sprite(spriteAdd));
+    for (const champ of CHAMPION_LIST) {
+        const projTpl = getCachedProjectileTemplate(champ.id);
+        if (projTpl) {
+            const clone = projTpl.clone();
+            clone.traverse((child) => {
+                const mesh = child;
+                if (mesh.isMesh && mesh.material && !Array.isArray(mesh.material)) {
+                    prewarmedVfxMats.push(mesh.material);
+                }
+            });
+            warmupGroup.add(clone);
+        }
+        const zoneTpl = getCachedZoneMeshTemplate(champ.id);
+        if (zoneTpl) {
+            const clone = zoneTpl.clone();
+            clone.traverse((child) => {
+                const mesh = child;
+                if (mesh.isMesh && mesh.material && !Array.isArray(mesh.material)) {
+                    prewarmedVfxMats.push(mesh.material);
+                }
+            });
+            warmupGroup.add(clone);
+        }
+    }
+    warmupGroup.traverse((child) => {
+        child.frustumCulled = false;
+    });
+    const prevDebrisVis = debrisPoints.visible;
+    debrisPoints.visible = true;
+    scene.add(warmupGroup);
+    renderer.compile(scene, camera);
+    // Perform one micro draw pass so ANGLE/Metal also builds final GPU pipelines upfront
+    renderer.render(scene, camera);
+    scene.remove(warmupGroup);
+    debrisPoints.visible = prevDebrisVis;
+}
 // ============================================================================
 // DYNAMIC SKILLSHOT INDICATOR (LINE OR GROUND AOE CIRCLE PER CHAMPION)
 // ============================================================================
 const lineIndicatorGroup = new THREE.Group();
 lineIndicatorGroup.visible = false;
 scene.add(lineIndicatorGroup);
-const lineIndicatorMat = new THREE.MeshBasicMaterial({
+const lineIndicatorMat = createVfxBasicMat({
     color: 0x0ac8b9,
-    transparent: true,
-    opacity: 0.32,
-    side: THREE.DoubleSide,
-    depthWrite: false
+    opacity: 0.32
 });
 const lineGeoCache = new Map();
 const lineIndicatorMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), lineIndicatorMat);
@@ -969,12 +1053,9 @@ lineIndicatorMesh.position.y = 4;
 lineIndicatorGroup.add(lineIndicatorMesh);
 const circleRangeRingGeo = new THREE.RingGeometry(0.985, 1.0, 64);
 circleRangeRingGeo.rotateX(-Math.PI / 2);
-const circleRangeRingMat = new THREE.MeshBasicMaterial({
+const circleRangeRingMat = createVfxBasicMat({
     color: 0x0ac8b9,
-    transparent: true,
-    opacity: 0.42,
-    side: THREE.DoubleSide,
-    depthWrite: false
+    opacity: 0.42
 });
 const circleRangeMesh = new THREE.Mesh(circleRangeRingGeo, circleRangeRingMat);
 circleRangeMesh.visible = false;
@@ -983,22 +1064,16 @@ scene.add(circleRangeMesh);
 const circleTargetGroup = new THREE.Group();
 circleTargetGroup.visible = false;
 scene.add(circleTargetGroup);
-const circleTargetFillMat = new THREE.MeshBasicMaterial({
+const circleTargetFillMat = createVfxBasicMat({
     color: 0xb833ff,
-    transparent: true,
-    opacity: 0.25,
-    side: THREE.DoubleSide,
-    depthWrite: false
+    opacity: 0.25
 });
 const circleTargetFill = new THREE.Mesh(sharedZoneFillGeo, circleTargetFillMat);
 circleTargetFill.position.y = 4;
 circleTargetGroup.add(circleTargetFill);
-const circleTargetRimMat = new THREE.MeshBasicMaterial({
+const circleTargetRimMat = createVfxBasicMat({
     color: 0x0ac8b9,
-    transparent: true,
-    opacity: 0.88,
-    side: THREE.DoubleSide,
-    depthWrite: false
+    opacity: 0.88
 });
 const circleTargetRim = new THREE.Mesh(sharedZoneOuterRingGeo, circleTargetRimMat);
 circleTargetRim.position.y = 4.5;
