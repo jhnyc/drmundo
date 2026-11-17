@@ -176,16 +176,6 @@ window.addEventListener('mousemove', (e: MouseEvent) => {
 
 window.addEventListener('contextmenu', (e: MouseEvent) => {
   e.preventDefault();
-  if (state.roomState !== 'playing') return;
-  audio.ensureContext();
-  updateMouseWorldPosition(e.clientX, e.clientY);
-  sendWs({
-    type: 'move',
-    x: state.mouseWorld.x,
-    z: state.mouseWorld.z
-  });
-  spawnMoveClickIndicator(state.mouseWorld.x, state.mouseWorld.z);
-  audio.playMoveClick();
 });
 
 renderer.domElement.addEventListener('mousedown', (e: MouseEvent) => {
