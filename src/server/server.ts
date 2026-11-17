@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express';
+import fs from 'fs';
 import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -35,7 +36,21 @@ import type { ConnectedClient, GameRoom, ServerPlayerState } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PROJECT_ROOT = path.resolve(__dirname, '..');
+
+function resolveProjectRoot(startDir: string): string {
+  let dir = startDir;
+  for (let i = 0; i < 5; i++) {
+    if (fs.existsSync(path.join(dir, 'public', 'index.html'))) {
+      return dir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return path.resolve(startDir, '../..');
+}
+
+const PROJECT_ROOT = resolveProjectRoot(__dirname);
 
 const app = express();
 const server = http.createServer(app);

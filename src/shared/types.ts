@@ -1,3 +1,5 @@
+export type ChampionId = 'drmundo';
+
 export type SummonerSpellId = 'flash' | 'heal' | 'ghost';
 
 export type CooldownMode = 'fast' | 'standard';

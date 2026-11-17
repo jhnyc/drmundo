@@ -2,9 +2,9 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false,
-    "rootDir": "./src/client",
-    "outDir": "./public",
+    "rootDir": "./src",
+    "outDir": "./public/build",
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
-  "include": ["src/client/**/*.ts", "src/shared/**/*.d.ts"]
+  "include": ["src/client/**/*.ts", "src/shared/**/*.ts"]
 }
