@@ -1,6 +1,7 @@
 import type { WebSocket } from 'ws';
 import type {
   AnimKey,
+  ChampionId,
   EmoteKey,
   GameEvent,
   PlayerMatchStats,
@@ -16,6 +17,8 @@ export interface BotAIState {
 }
 
 export interface PendingCast {
+  targetX: number;
+  targetZ: number;
   dirX: number;
   dirZ: number;
 }
@@ -23,6 +26,7 @@ export interface PendingCast {
 export interface ServerPlayerState {
   slot: number;
   name: string;
+  championId: ChampionId;
   isBot: boolean;
   ready: boolean;
   spells: [SummonerSpellId, SummonerSpellId];
@@ -44,6 +48,9 @@ export interface ServerPlayerState {
   castTimer: number;
   pendingCast: PendingCast | null;
   slowTimer: number;
+  slowPercent: number;
+  knockupTimer: number;
+  knockupDuration: number;
   ghostTimer: number;
   healSpeedTimer: number;
   emoteTimer: number;
@@ -55,6 +62,7 @@ export interface ServerPlayerState {
 export interface ServerProjectile {
   id: number;
   ownerSlot: number;
+  championId: ChampionId;
   x: number;
   z: number;
   startX: number;
@@ -64,6 +72,28 @@ export interface ServerProjectile {
   speed: number;
   maxRange: number;
   radius: number;
+  damageFlatMin: number;
+  damagePercentCurrentHp: number;
+  slowPercent: number;
+  slowDuration: number;
+  refundOnHit: number;
+}
+
+export interface ServerGroundZone {
+  id: number;
+  ownerSlot: number;
+  championId: ChampionId;
+  x: number;
+  z: number;
+  radius: number;
+  remaining: number;
+  duration: number;
+  damageFlatMin: number;
+  damagePercentCurrentHp: number;
+  knockupDuration: number;
+  slowPercent: number;
+  slowDuration: number;
+  refundOnHit: number;
 }
 
 export interface ConnectedClient {
@@ -83,6 +113,7 @@ export interface GameRoom {
   lastBroadcastCountdownSec: number;
   roundEndTimer: number;
   nextProjId: number;
+  nextZoneId: number;
   winnerSlot?: number;
   botEnabled: boolean;
   botDifficulty: string;
@@ -90,6 +121,7 @@ export interface GameRoom {
   clients: ConnectedClient[];
   players: [ServerPlayerState | null, ServerPlayerState | null];
   projectiles: ServerProjectile[];
+  groundZones: ServerGroundZone[];
   events: GameEvent[];
   restoredAt?: number;
 }

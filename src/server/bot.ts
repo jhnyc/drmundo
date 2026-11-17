@@ -1,5 +1,6 @@
-import { castInfectedBonesaw, clampToBaronPitHalf, useSummonerSpell } from './actions.js';
-import { INV_SQRT2, MUNDO_STATS } from './constants.js';
+import { getChampionConfig } from '../shared/champions/index.js';
+import { INV_SQRT2 } from '../shared/constants.js';
+import { castPrimaryAbility, clampToBaronPitHalf, useSummonerSpell } from './actions.js';
 import type { GameRoom, ServerPlayerState, ServerProjectile } from './types.js';
 
 export function updateBotAI(
@@ -13,7 +14,10 @@ export function updateBotAI(
   ai.moveCooldown -= dt;
   ai.qThinkCooldown -= dt;
 
-  // Check if any enemy projectile is heading toward bot -> dodge perpendicular!
+  const botChamp = getChampionConfig(bot.championId);
+  const oppChamp = getChampionConfig(opponent.championId);
+
+  // 1. Check incoming projectiles -> dodge perpendicular
   let dangerProj: ServerProjectile | null = null;
   for (const proj of room.projectiles) {
     if (proj.ownerSlot !== bot.slot) {
@@ -22,7 +26,7 @@ export function updateBotAI(
       const forwardDot = toBotX * proj.dirX + toBotZ * proj.dirZ;
       if (forwardDot > -40 && forwardDot < 700) {
         const perpDist = Math.abs(toBotX * -proj.dirZ + toBotZ * proj.dirX);
-        if (perpDist < MUNDO_STATS.hitboxRadius + MUNDO_STATS.qRadius + 85) {
+        if (perpDist < botChamp.stats.hitboxRadius + proj.radius + 85) {
           dangerProj = proj;
           break;
         }
@@ -30,13 +34,19 @@ export function updateBotAI(
     }
   }
 
-  if (dangerProj) {
+  // 2. Check delayed ground AoE zones under the bot -> move radially out
+  const dangerZone = room.groundZones.find((zone) => {
+    if (zone.ownerSlot === bot.slot) return false;
+    return Math.hypot(bot.x - zone.x, bot.z - zone.z) < botChamp.stats.hitboxRadius + zone.radius + 60;
+  });
+
+  if (dangerProj && bot.knockupTimer <= 0) {
     const perpX = -dangerProj.dirZ;
     const perpZ = dangerProj.dirX;
     const side = (bot.x - dangerProj.x) * perpX + (bot.z - dangerProj.z) * perpZ >= 0 ? 1 : -1;
     const dodgeX = bot.x + perpX * side * 260;
     const dodgeZ = bot.z + perpZ * side * 260;
-    const clamped = clampToBaronPitHalf(dodgeX, dodgeZ, bot.slot);
+    const clamped = clampToBaronPitHalf(dodgeX, dodgeZ, bot.slot, botChamp.stats.hitboxRadius);
     bot.targetX = clamped.x;
     bot.targetZ = clamped.z;
 
@@ -45,7 +55,27 @@ export function updateBotAI(
     if (flashIdx !== -1 && bot.spellCd[flashIdx] <= 0 && distToProj < 260 && bot.hp < 650) {
       useSummonerSpell(room, bot, flashIdx, clamped.x, clamped.z);
     }
-  } else if (ai.moveCooldown <= 0) {
+  } else if (dangerZone && bot.knockupTimer <= 0) {
+    const dx = bot.x - dangerZone.x;
+    const dz = bot.z - dangerZone.z;
+    const len = Math.hypot(dx, dz);
+    const escapeDirX = len > 1e-3 ? dx / len : bot.slot === 0 ? -INV_SQRT2 : INV_SQRT2;
+    const escapeDirZ = len > 1e-3 ? dz / len : bot.slot === 0 ? -INV_SQRT2 : INV_SQRT2;
+    const escapeDist = dangerZone.radius + botChamp.stats.hitboxRadius + 110;
+    const clamped = clampToBaronPitHalf(
+      dangerZone.x + escapeDirX * escapeDist,
+      dangerZone.z + escapeDirZ * escapeDist,
+      bot.slot,
+      botChamp.stats.hitboxRadius
+    );
+    bot.targetX = clamped.x;
+    bot.targetZ = clamped.z;
+
+    const flashIdx = bot.spells.indexOf('flash');
+    if (flashIdx !== -1 && bot.spellCd[flashIdx] <= 0 && dangerZone.remaining < 0.25 && bot.hp < 700) {
+      useSummonerSpell(room, bot, flashIdx, clamped.x, clamped.z);
+    }
+  } else if (ai.moveCooldown <= 0 && bot.knockupTimer <= 0) {
     ai.moveCooldown = 0.38 + Math.random() * 0.45;
     if (Math.random() < 0.45) ai.strafeSign *= -1;
     const alongPit = (Math.random() - 0.5) * 750;
@@ -53,7 +83,7 @@ export function updateBotAI(
     const sign = bot.slot === 0 ? -1 : 1;
     const desiredX = sign * distFromLine * INV_SQRT2 - alongPit * INV_SQRT2;
     const desiredZ = sign * distFromLine * INV_SQRT2 + alongPit * INV_SQRT2;
-    const clamped = clampToBaronPitHalf(desiredX, desiredZ, bot.slot);
+    const clamped = clampToBaronPitHalf(desiredX, desiredZ, bot.slot, botChamp.stats.hitboxRadius);
     bot.targetX = clamped.x;
     bot.targetZ = clamped.z;
   }
@@ -68,23 +98,39 @@ export function updateBotAI(
     useSummonerSpell(room, bot, ghostIdx, bot.x, bot.z);
   }
 
-  if (bot.qCd <= 0 && bot.castTimer <= 0 && ai.qThinkCooldown <= 0) {
+  if (bot.qCd <= 0 && bot.castTimer <= 0 && bot.knockupTimer <= 0 && ai.qThinkCooldown <= 0) {
+    const q = botChamp.q;
     const dist = Math.hypot(opponent.x - bot.x, opponent.z - bot.z);
-    if (dist <= MUNDO_STATS.qRange - 35) {
-      const travelTime = dist / MUNDO_STATS.qSpeed;
+    if (dist <= q.range - 35) {
       const oppDx = opponent.targetX - opponent.x;
       const oppDz = opponent.targetZ - opponent.z;
       const oppMoveDist = Math.hypot(oppDx, oppDz);
+
       let aimX = opponent.x;
       let aimZ = opponent.z;
-      if (oppMoveDist > 15) {
-        const leadFactor = 0.65 + Math.random() * 0.35;
-        aimX += (oppDx / oppMoveDist) * MUNDO_STATS.baseMoveSpeed * travelTime * leadFactor;
-        aimZ += (oppDz / oppMoveDist) * MUNDO_STATS.baseMoveSpeed * travelTime * leadFactor;
+
+      if (q.archetype === 'linear_projectile') {
+        const travelTime = dist / q.speed;
+        if (oppMoveDist > 15) {
+          const leadFactor = 0.65 + Math.random() * 0.35;
+          aimX += (oppDx / oppMoveDist) * oppChamp.stats.baseMoveSpeed * travelTime * leadFactor;
+          aimZ += (oppDz / oppMoveDist) * oppChamp.stats.baseMoveSpeed * travelTime * leadFactor;
+        }
+        aimX += (Math.random() - 0.5) * 55;
+        aimZ += (Math.random() - 0.5) * 55;
+      } else {
+        const leadTime = q.castTime + q.delay;
+        if (oppMoveDist > 15) {
+          const leadFactor = 0.6 + Math.random() * 0.3;
+          const leadDist = Math.min(oppMoveDist, oppChamp.stats.baseMoveSpeed * leadTime * leadFactor);
+          aimX += (oppDx / oppMoveDist) * leadDist;
+          aimZ += (oppDz / oppMoveDist) * leadDist;
+        }
+        aimX += (Math.random() - 0.5) * 40;
+        aimZ += (Math.random() - 0.5) * 40;
       }
-      aimX += (Math.random() - 0.5) * 55;
-      aimZ += (Math.random() - 0.5) * 55;
-      castInfectedBonesaw(room, bot, aimX, aimZ);
+
+      castPrimaryAbility(room, bot, aimX, aimZ);
       ai.qThinkCooldown = 0.25 + Math.random() * 0.35;
     }
   }

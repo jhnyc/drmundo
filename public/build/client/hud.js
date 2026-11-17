@@ -156,8 +156,8 @@ export function updateInGameHud() {
     setTextIfChanged('round', dom.roundLabel, `ROUND ${state.round} (BO${state.bestOf})`);
     if (!me)
         return;
-    const thrown = me.stats?.cleaversThrown || 0;
-    const hits = me.stats?.cleaversHit || 0;
+    const thrown = me.stats?.abilitiesCast || 0;
+    const hits = me.stats?.abilitiesHit || 0;
     const acc = thrown > 0 ? Math.round((hits / thrown) * 100) : 0;
     setTextIfChanged('acc', dom.accLabel, `Cleaver Acc: ${acc}% (${hits}/${thrown})`);
     setTextIfChanged('hits', dom.statHits, `${hits}`);

@@ -1,13 +1,361 @@
+import { getChampionConfig } from '../shared/champions/index.js';
+import type { QAbilityDamageConfig } from '../shared/champions/types.js';
+import { PIT_RADIUS, SUMMONER_SPELLS } from '../shared/constants.js';
 import type {
+  ChampionId,
+  GroundZoneSnapshot,
   PlayerSnapshot,
   ProjectileSnapshot,
   ServerToClientMessage
 } from '../shared/types.js';
 import { clampToBaronPitHalf } from './actions.js';
-import { trackEvent } from './analytics.js';
 import { updateBotAI } from './bot.js';
-import { MUNDO_STATS, PIT_RADIUS, SUMMONER_SPELLS } from './constants.js';
 import type { GameRoom, ServerPlayerState } from './types.js';
+
+function computeAbilityDamage(targetHp: number, damage: QAbilityDamageConfig): number {
+  const rawPctDmg = targetHp * damage.percentCurrentHp;
+  return Math.round(Math.max(damage.flatMin, rawPctDmg));
+}
+
+function releasePendingCast(room: GameRoom, player: ServerPlayerState): void {
+  if (!player.pendingCast) return;
+  const { targetX, targetZ, dirX, dirZ } = player.pendingCast;
+  player.pendingCast = null;
+
+  const champ = getChampionConfig(player.championId);
+  const q = champ.q;
+
+  if (q.archetype === 'linear_projectile') {
+    const projId = ++room.nextProjId;
+    const spawnX = player.x + dirX * q.spawnOffset;
+    const spawnZ = player.z + dirZ * q.spawnOffset;
+    room.projectiles.push({
+      id: projId,
+      ownerSlot: player.slot,
+      championId: player.championId,
+      x: spawnX,
+      z: spawnZ,
+      startX: spawnX,
+      startZ: spawnZ,
+      dirX,
+      dirZ,
+      speed: q.speed,
+      maxRange: q.range,
+      radius: q.radius,
+      damageFlatMin: q.damage.flatMin,
+      damagePercentCurrentHp: q.damage.percentCurrentHp,
+      slowPercent: q.slow?.percent ?? 0,
+      slowDuration: q.slow?.duration ?? 0,
+      refundOnHit: q.refundOnHit
+    });
+    room.events.push({
+      type: 'q_launch',
+      slot: player.slot,
+      championId: player.championId,
+      projId,
+      x: spawnX,
+      z: spawnZ,
+      dirX,
+      dirZ
+    });
+    return;
+  }
+
+  // Delayed ground AoE (e.g., Cho'Gath Rupture)
+  const zoneId = ++room.nextZoneId;
+  room.groundZones.push({
+    id: zoneId,
+    ownerSlot: player.slot,
+    championId: player.championId,
+    x: targetX,
+    z: targetZ,
+    radius: q.radius,
+    remaining: q.delay,
+    duration: q.delay,
+    damageFlatMin: q.damage.flatMin,
+    damagePercentCurrentHp: q.damage.percentCurrentHp,
+    knockupDuration: q.knockupDuration,
+    slowPercent: q.slow?.percent ?? 0,
+    slowDuration: q.slow?.duration ?? 0,
+    refundOnHit: q.refundOnHit
+  });
+  room.events.push({
+    type: 'zone_spawn',
+    zoneId,
+    ownerSlot: player.slot,
+    championId: player.championId,
+    x: targetX,
+    z: targetZ,
+    radius: q.radius,
+    duration: q.delay
+  });
+}
+
+function applyHitAndCheckRoundEnd(
+  room: GameRoom,
+  params: {
+    attackerSlot: number;
+    attackerChampionId: ChampionId;
+    victim: ServerPlayerState;
+    projId?: number;
+    zoneId?: number;
+    damageFlatMin: number;
+    damagePercentCurrentHp: number;
+    slowPercent: number;
+    slowDuration: number;
+    knockupDuration?: number;
+    refundOnHit: number;
+  },
+  onGameOver?: (room: GameRoom) => void
+): void {
+  const { victim } = params;
+  const caster = room.players[params.attackerSlot];
+  const dmg = computeAbilityDamage(victim.hp, {
+    flatMin: params.damageFlatMin,
+    percentCurrentHp: params.damagePercentCurrentHp
+  });
+
+  victim.hp = Math.max(0, victim.hp - dmg);
+
+  if (params.slowDuration > 0 && params.slowPercent > 0) {
+    if (victim.slowTimer <= 0 || params.slowPercent >= victim.slowPercent) {
+      victim.slowPercent = params.slowPercent;
+    }
+    victim.slowTimer = Math.max(victim.slowTimer, params.slowDuration);
+  }
+
+  if (params.knockupDuration && params.knockupDuration > 0) {
+    victim.knockupTimer = Math.max(victim.knockupTimer, params.knockupDuration);
+    victim.knockupDuration = Math.max(victim.knockupDuration, params.knockupDuration);
+    victim.targetX = victim.x;
+    victim.targetZ = victim.z;
+    victim.emoteTimer = 0;
+  }
+
+  if (caster && caster.alive) {
+    if (params.refundOnHit > 0) {
+      caster.hp = Math.min(caster.maxHp, caster.hp + params.refundOnHit);
+    }
+    caster.stats.abilitiesHit += 1;
+    caster.stats.damageDealt += dmg;
+  }
+
+  room.events.push({
+    type: 'q_hit',
+    projId: params.projId,
+    zoneId: params.zoneId,
+    attackerSlot: params.attackerSlot,
+    attackerChampionId: params.attackerChampionId,
+    victimSlot: victim.slot,
+    x: victim.x,
+    z: victim.z,
+    damage: dmg,
+    refund: params.refundOnHit,
+    knockupDuration: params.knockupDuration
+  });
+
+  if (victim.hp <= 0) {
+    victim.alive = false;
+    victim.anim = 'death';
+    victim.knockupTimer = 0;
+    victim.knockupDuration = 0;
+    if (caster) caster.score += 1;
+
+    const winsNeeded = Math.ceil((room.settings.bestOf || 3) / 2);
+    const matchOver = Boolean(caster && caster.score >= winsNeeded);
+
+    room.events.push({
+      type: 'round_kill',
+      winnerSlot: params.attackerSlot,
+      loserSlot: victim.slot,
+      round: room.round,
+      scores: [room.players[0]?.score || 0, room.players[1]?.score || 0],
+      matchOver
+    });
+
+    if (matchOver) {
+      room.state = 'gameover';
+      room.winnerSlot = params.attackerSlot;
+      onGameOver?.(room);
+    } else {
+      room.state = 'round_end';
+      room.roundEndTimer = 3.5;
+    }
+  }
+}
+
+function stepPlayers(room: GameRoom, dt: number): void {
+  for (let i = 0; i < 2; i++) {
+    const p = room.players[i];
+    if (!p || !p.alive) continue;
+
+    const champ = getChampionConfig(p.championId);
+
+    if (p.isBot) {
+      const opp = room.players[1 - i];
+      updateBotAI(room, p, opp, dt);
+    }
+
+    if (p.qCd > 0) p.qCd = Math.max(0, p.qCd - dt);
+    if (p.spellCd[0] > 0) p.spellCd[0] = Math.max(0, p.spellCd[0] - dt);
+    if (p.spellCd[1] > 0) p.spellCd[1] = Math.max(0, p.spellCd[1] - dt);
+    if (p.slowTimer > 0) {
+      p.slowTimer = Math.max(0, p.slowTimer - dt);
+      if (p.slowTimer === 0) p.slowPercent = 0;
+    }
+    if (p.knockupTimer > 0) {
+      p.knockupTimer = Math.max(0, p.knockupTimer - dt);
+      if (p.knockupTimer === 0) p.knockupDuration = 0;
+    }
+    if (p.ghostTimer > 0) p.ghostTimer = Math.max(0, p.ghostTimer - dt);
+    if (p.healSpeedTimer > 0) p.healSpeedTimer = Math.max(0, p.healSpeedTimer - dt);
+    if (p.emoteTimer > 0) p.emoteTimer = Math.max(0, p.emoteTimer - dt);
+
+    p.hp = Math.min(p.maxHp, p.hp + champ.stats.hpRegenPerSec * dt);
+
+    if (p.castTimer > 0) {
+      p.castTimer -= dt;
+      if (p.castTimer <= 0 && p.pendingCast) {
+        releasePendingCast(room, p);
+      }
+      continue;
+    }
+
+    if (p.knockupTimer > 0) {
+      p.anim = 'idle';
+      continue;
+    }
+
+    const dx = p.targetX - p.x;
+    const dz = p.targetZ - p.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist > 4) {
+      let speed = champ.stats.baseMoveSpeed;
+      if (p.ghostTimer > 0) speed *= 1 + SUMMONER_SPELLS.ghost.speedBoost;
+      if (p.healSpeedTimer > 0) speed *= 1 + SUMMONER_SPELLS.heal.speedBoost;
+      if (p.slowTimer > 0 && p.slowPercent > 0) speed *= 1 - p.slowPercent;
+
+      const step = Math.min(dist, speed * dt);
+      const nx = p.x + (dx / dist) * step;
+      const nz = p.z + (dz / dist) * step;
+      const clamped = clampToBaronPitHalf(nx, nz, p.slot, champ.stats.hitboxRadius);
+      p.x = clamped.x;
+      p.z = clamped.z;
+      p.angle = Math.atan2(dx, dz);
+      p.anim = p.ghostTimer > 0 ? 'run_haste' : 'run';
+      p.emoteTimer = 0;
+    } else {
+      p.anim = p.emoteTimer > 0 ? p.emoteAnim || 'taunt' : 'idle';
+    }
+  }
+}
+
+function stepProjectiles(room: GameRoom, dt: number, onGameOver?: (room: GameRoom) => void): void {
+  for (let i = room.projectiles.length - 1; i >= 0; i--) {
+    const proj = room.projectiles[i];
+    proj.x += proj.dirX * proj.speed * dt;
+    proj.z += proj.dirZ * proj.speed * dt;
+
+    const targetSlot = 1 - proj.ownerSlot;
+    const target = room.players[targetSlot];
+
+    if (target && target.alive) {
+      const targetChamp = getChampionConfig(target.championId);
+      const hitDist = Math.hypot(target.x - proj.x, target.z - proj.z);
+      if (hitDist <= targetChamp.stats.hitboxRadius + proj.radius) {
+        room.projectiles.splice(i, 1);
+        applyHitAndCheckRoundEnd(
+          room,
+          {
+            attackerSlot: proj.ownerSlot,
+            attackerChampionId: proj.championId,
+            victim: target,
+            projId: proj.id,
+            damageFlatMin: proj.damageFlatMin,
+            damagePercentCurrentHp: proj.damagePercentCurrentHp,
+            slowPercent: proj.slowPercent,
+            slowDuration: proj.slowDuration,
+            refundOnHit: proj.refundOnHit
+          },
+          onGameOver
+        );
+        continue;
+      }
+    }
+
+    const traveled = Math.hypot(proj.x - proj.startX, proj.z - proj.startZ);
+    const distFromCenter = Math.hypot(proj.x, proj.z);
+    if (traveled >= proj.maxRange || distFromCenter >= PIT_RADIUS + 65) {
+      room.events.push({
+        type: 'q_miss',
+        projId: proj.id,
+        attackerSlot: proj.ownerSlot,
+        attackerChampionId: proj.championId,
+        x: proj.x,
+        z: proj.z
+      });
+      room.projectiles.splice(i, 1);
+    }
+  }
+}
+
+function stepGroundZones(room: GameRoom, dt: number, onGameOver?: (room: GameRoom) => void): void {
+  for (let i = room.groundZones.length - 1; i >= 0; i--) {
+    const zone = room.groundZones[i];
+    zone.remaining -= dt;
+    if (zone.remaining > 0) continue;
+
+    room.groundZones.splice(i, 1);
+
+    const targetSlot = 1 - zone.ownerSlot;
+    const target = room.players[targetSlot];
+    let hitVictim = false;
+    if (target && target.alive) {
+      const targetChamp = getChampionConfig(target.championId);
+      const dist = Math.hypot(target.x - zone.x, target.z - zone.z);
+      hitVictim = dist <= targetChamp.stats.hitboxRadius + zone.radius;
+    }
+
+    room.events.push({
+      type: 'zone_erupt',
+      zoneId: zone.id,
+      ownerSlot: zone.ownerSlot,
+      championId: zone.championId,
+      x: zone.x,
+      z: zone.z,
+      radius: zone.radius,
+      hitVictim
+    });
+
+    if (hitVictim && target) {
+      applyHitAndCheckRoundEnd(
+        room,
+        {
+          attackerSlot: zone.ownerSlot,
+          attackerChampionId: zone.championId,
+          victim: target,
+          zoneId: zone.id,
+          damageFlatMin: zone.damageFlatMin,
+          damagePercentCurrentHp: zone.damagePercentCurrentHp,
+          slowPercent: zone.slowPercent,
+          slowDuration: zone.slowDuration,
+          knockupDuration: zone.knockupDuration,
+          refundOnHit: zone.refundOnHit
+        },
+        onGameOver
+      );
+    } else {
+      room.events.push({
+        type: 'q_miss',
+        zoneId: zone.id,
+        attackerSlot: zone.ownerSlot,
+        attackerChampionId: zone.championId,
+        x: zone.x,
+        z: zone.z
+      });
+    }
+  }
+}
 
 export function stepRoomSimulation(
   room: GameRoom,
@@ -27,187 +375,9 @@ export function stepRoomSimulation(
   }
 
   room.matchTime += dt;
-
-  // Update players
-  for (let i = 0; i < 2; i++) {
-    const p = room.players[i];
-    if (!p || !p.alive) continue;
-
-    if (p.isBot) {
-      const opp = room.players[1 - i];
-      updateBotAI(room, p, opp, dt);
-    }
-
-    if (p.qCd > 0) p.qCd = Math.max(0, p.qCd - dt);
-    if (p.spellCd[0] > 0) p.spellCd[0] = Math.max(0, p.spellCd[0] - dt);
-    if (p.spellCd[1] > 0) p.spellCd[1] = Math.max(0, p.spellCd[1] - dt);
-    if (p.slowTimer > 0) p.slowTimer = Math.max(0, p.slowTimer - dt);
-    if (p.ghostTimer > 0) p.ghostTimer = Math.max(0, p.ghostTimer - dt);
-    if (p.healSpeedTimer > 0) p.healSpeedTimer = Math.max(0, p.healSpeedTimer - dt);
-    if (p.emoteTimer > 0) p.emoteTimer = Math.max(0, p.emoteTimer - dt);
-
-    // Passive HP Regen (Goes Where He Pleases)
-    p.hp = Math.min(p.maxHp, p.hp + MUNDO_STATS.hpRegenPerSec * dt);
-
-    // Cast timer (Infected Bonesaw windup)
-    if (p.castTimer > 0) {
-      p.castTimer -= dt;
-      if (p.castTimer <= 0 && p.pendingCast) {
-        const { dirX, dirZ } = p.pendingCast;
-        p.pendingCast = null;
-        const projId = ++room.nextProjId;
-        const spawnX = p.x + dirX * 55;
-        const spawnZ = p.z + dirZ * 55;
-        room.projectiles.push({
-          id: projId,
-          ownerSlot: p.slot,
-          x: spawnX,
-          z: spawnZ,
-          startX: spawnX,
-          startZ: spawnZ,
-          dirX,
-          dirZ,
-          speed: MUNDO_STATS.qSpeed,
-          maxRange: MUNDO_STATS.qRange,
-          radius: MUNDO_STATS.qRadius
-        });
-        room.events.push({
-          type: 'q_launch',
-          slot: p.slot,
-          projId,
-          x: spawnX,
-          z: spawnZ,
-          dirX,
-          dirZ
-        });
-      }
-      continue;
-    }
-
-    const dx = p.targetX - p.x;
-    const dz = p.targetZ - p.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist > 4) {
-      let speed: number = MUNDO_STATS.baseMoveSpeed;
-      if (p.ghostTimer > 0) speed *= 1 + SUMMONER_SPELLS.ghost.speedBoost;
-      if (p.healSpeedTimer > 0) speed *= 1 + SUMMONER_SPELLS.heal.speedBoost;
-      if (p.slowTimer > 0) speed *= 1 - MUNDO_STATS.qSlowPercent;
-
-      const step = Math.min(dist, speed * dt);
-      const nx = p.x + (dx / dist) * step;
-      const nz = p.z + (dz / dist) * step;
-      const clamped = clampToBaronPitHalf(nx, nz, p.slot);
-      p.x = clamped.x;
-      p.z = clamped.z;
-      p.angle = Math.atan2(dx, dz);
-      p.anim = p.ghostTimer > 0 ? 'run_haste' : 'run';
-      p.emoteTimer = 0;
-    } else {
-      p.anim = p.emoteTimer > 0 ? p.emoteAnim || 'taunt' : 'idle';
-    }
-  }
-
-  // Update flying Infected Bonesaw (Q) projectiles
-  for (let i = room.projectiles.length - 1; i >= 0; i--) {
-    const proj = room.projectiles[i];
-    proj.x += proj.dirX * proj.speed * dt;
-    proj.z += proj.dirZ * proj.speed * dt;
-
-    const targetSlot = 1 - proj.ownerSlot;
-    const target = room.players[targetSlot];
-    const caster = room.players[proj.ownerSlot];
-
-    if (target && target.alive) {
-      const hitDist = Math.hypot(target.x - proj.x, target.z - proj.z);
-      if (hitDist <= MUNDO_STATS.hitboxRadius + proj.radius) {
-        const rawPctDmg = target.hp * MUNDO_STATS.qPercentCurrentHp;
-        const dmg = Math.round(Math.max(MUNDO_STATS.qMinDamage, rawPctDmg));
-        target.hp = Math.max(0, target.hp - dmg);
-        target.slowTimer = MUNDO_STATS.qSlowDuration;
-
-        if (caster && caster.alive) {
-          caster.hp = Math.min(caster.maxHp, caster.hp + MUNDO_STATS.qCost);
-          caster.stats.cleaversHit += 1;
-          caster.stats.damageDealt += dmg;
-        }
-
-        room.events.push({
-          type: 'q_hit',
-          projId: proj.id,
-          attackerSlot: proj.ownerSlot,
-          victimSlot: targetSlot,
-          x: target.x,
-          z: target.z,
-          damage: dmg,
-          refund: MUNDO_STATS.qCost
-        });
-
-        room.projectiles.splice(i, 1);
-
-        if (target.hp <= 0) {
-          target.alive = false;
-          target.anim = 'death';
-          if (caster) caster.score += 1;
-
-          const winsNeeded = Math.ceil((room.settings.bestOf || 3) / 2);
-          const matchOver = Boolean(caster && caster.score >= winsNeeded);
-
-          room.events.push({
-            type: 'round_kill',
-            winnerSlot: proj.ownerSlot,
-            loserSlot: targetSlot,
-            round: room.round,
-            scores: [room.players[0]?.score || 0, room.players[1]?.score || 0],
-            matchOver
-          });
-
-          trackEvent(room.id, 'round_completed', {
-            roomId: room.id,
-            round: room.round,
-            winnerSlot: proj.ownerSlot,
-            winnerIsBot: Boolean(caster?.isBot),
-            matchOver,
-            matchTimeSec: Math.round(room.matchTime)
-          });
-
-          if (matchOver) {
-            room.state = 'gameover';
-            room.winnerSlot = proj.ownerSlot;
-            trackEvent(room.id, 'match_completed', {
-              roomId: room.id,
-              roundsPlayed: room.round,
-              matchTimeSec: Math.round(room.matchTime),
-              bestOf: room.settings.bestOf,
-              cooldownMode: room.settings.cooldownMode,
-              withBot: room.botEnabled,
-              winnerIsBot: Boolean(caster?.isBot),
-              p0Spells: room.players[0]?.spells,
-              p1Spells: room.players[1]?.spells,
-              p0Stats: room.players[0]?.stats,
-              p1Stats: room.players[1]?.stats
-            });
-            onGameOver?.(room);
-          } else {
-            room.state = 'round_end';
-            room.roundEndTimer = 3.5;
-          }
-        }
-        continue;
-      }
-    }
-
-    const traveled = Math.hypot(proj.x - proj.startX, proj.z - proj.startZ);
-    const distFromCenter = Math.hypot(proj.x, proj.z);
-    if (traveled >= proj.maxRange || distFromCenter >= PIT_RADIUS + 65) {
-      room.events.push({
-        type: 'q_miss',
-        projId: proj.id,
-        x: proj.x,
-        z: proj.z
-      });
-      room.projectiles.splice(i, 1);
-    }
-  }
+  stepPlayers(room, dt);
+  stepProjectiles(room, dt, onGameOver);
+  stepGroundZones(room, dt, onGameOver);
 }
 
 export function serializePlayerSnapshot(p: ServerPlayerState | null): PlayerSnapshot | null {
@@ -215,6 +385,7 @@ export function serializePlayerSnapshot(p: ServerPlayerState | null): PlayerSnap
   return {
     slot: p.slot,
     name: p.name,
+    championId: p.championId,
     x: Math.round(p.x * 10) / 10,
     z: Math.round(p.z * 10) / 10,
     targetX: Math.round(p.targetX * 10) / 10,
@@ -230,6 +401,8 @@ export function serializePlayerSnapshot(p: ServerPlayerState | null): PlayerSnap
     maxSpellCd: p.maxSpellCd,
     spells: p.spells,
     slowTimer: Math.round(p.slowTimer * 100) / 100,
+    knockupTimer: Math.round(p.knockupTimer * 100) / 100,
+    knockupDuration: Math.round(p.knockupDuration * 100) / 100,
     ghostTimer: Math.round(p.ghostTimer * 100) / 100,
     healSpeedTimer: Math.round(p.healSpeedTimer * 100) / 100,
     score: p.score,
@@ -241,10 +414,24 @@ export function buildStateSnapshot(room: GameRoom): ServerToClientMessage {
   const projectiles: ProjectileSnapshot[] = room.projectiles.map((pr) => ({
     id: pr.id,
     ownerSlot: pr.ownerSlot,
+    championId: pr.championId,
     x: Math.round(pr.x * 10) / 10,
     z: Math.round(pr.z * 10) / 10,
     dirX: Math.round(pr.dirX * 1000) / 1000,
-    dirZ: Math.round(pr.dirZ * 1000) / 1000
+    dirZ: Math.round(pr.dirZ * 1000) / 1000,
+    speed: pr.speed,
+    radius: pr.radius
+  }));
+
+  const groundZones: GroundZoneSnapshot[] = room.groundZones.map((zn) => ({
+    id: zn.id,
+    ownerSlot: zn.ownerSlot,
+    championId: zn.championId,
+    x: Math.round(zn.x * 10) / 10,
+    z: Math.round(zn.z * 10) / 10,
+    radius: zn.radius,
+    remaining: Math.round(zn.remaining * 100) / 100,
+    duration: zn.duration
   }));
 
   return {
@@ -257,6 +444,7 @@ export function buildStateSnapshot(room: GameRoom): ServerToClientMessage {
       serializePlayerSnapshot(room.players[1])
     ],
     projectiles,
+    groundZones,
     events: room.events
   };
 }

@@ -204,8 +204,8 @@ function handleGameEvents(events = []) {
                 titleEl.className = iWon ? 'victory' : 'defeat';
                 subEl.textContent = `${winnerName} wins the Baron Pit 1v1 (${ev.scores[0]} - ${ev.scores[1]})!`;
                 const me = state.serverPlayers[state.mySlot];
-                const thrown = me?.stats?.cleaversThrown || 0;
-                const hits = me?.stats?.cleaversHit || 0;
+                const thrown = me?.stats?.abilitiesCast || 0;
+                const hits = me?.stats?.abilitiesHit || 0;
                 const acc = thrown > 0 ? Math.round((hits / thrown) * 100) : 0;
                 statsEl.innerHTML = `
           <div><b>Final Series Score:</b> ${ev.scores[0]} – ${ev.scores[1]}</div>

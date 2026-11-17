@@ -5,6 +5,18 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket, RawData } from 'ws';
 import crypto from 'crypto';
+import {
+  DEFAULT_CHAMPION_ID,
+  getChampionConfig,
+  normalizeChampionId
+} from '../shared/champions/index.js';
+import {
+  DT,
+  TICK_RATE,
+  getSpellCooldown,
+  parseBestOf,
+  validateSpells
+} from '../shared/constants.js';
 import type {
   ClientToServerMessage,
   CooldownMode,
@@ -16,20 +28,14 @@ import type {
   ServerToClientMessage
 } from '../shared/types.js';
 import {
-  castInfectedBonesaw,
+  castPrimaryAbility,
   clampToBaronPitHalf,
   createPlayerState,
   resetRoundState,
+  setPlayerChampion,
   useSummonerSpell
 } from './actions.js';
 import { trackEvent } from './analytics.js';
-import {
-  DT,
-  TICK_RATE,
-  getSpellCooldown,
-  parseBestOf,
-  validateSpells
-} from './constants.js';
 import { RESTORED_ROOM_TTL_MS, RoomPersistence } from './persistence.js';
 import { buildStateSnapshot, stepRoomSimulation } from './simulation.js';
 import type { ConnectedClient, GameRoom, ServerPlayerState } from './types.js';
@@ -101,6 +107,7 @@ function serializeLobbyPlayer(p: ServerPlayerState | null, idx: number): LobbyPl
   return {
     slot: idx,
     name: p.name,
+    championId: p.championId,
     isBot: p.isBot,
     ready: p.ready,
     spells: p.spells,
@@ -252,6 +259,7 @@ function leaveCurrentRoom(client: ConnectedClient): void {
 
   room.state = 'lobby';
   room.projectiles = [];
+  room.groundZones = [];
   broadcastToRoom(room, serializeRoomLobby(room));
 }
 
@@ -313,6 +321,10 @@ wss.on('connection', (ws: WebSocket) => {
 
       const passcode = (msg.passcode || '').trim();
       const spells = validateSpells(msg.spells);
+      const championId = normalizeChampionId(msg.championId, DEFAULT_CHAMPION_ID);
+      const botChampionId = normalizeChampionId(msg.botChampionId, DEFAULT_CHAMPION_ID);
+      const hostChamp = getChampionConfig(championId);
+      const botChamp = getChampionConfig(botChampionId);
       const cooldownMode: CooldownMode = msg.cooldownMode === 'standard' ? 'standard' : 'fast';
       const settings: RoomSettings = {
         bestOf: parseBestOf(msg.bestOf),
@@ -329,17 +341,25 @@ wss.on('connection', (ws: WebSocket) => {
         lastBroadcastCountdownSec: -1,
         roundEndTimer: 0,
         nextProjId: 1,
+        nextZoneId: 1,
         botEnabled: Boolean(msg.withBot),
         botDifficulty: 'challenger',
         settings,
         clients: [client],
         players: [
-          createPlayerState(0, (msg.name || 'Mundo #1').slice(0, 20), spells, false),
+          createPlayerState(
+            0,
+            (msg.name || hostChamp.defaultPlayerName).slice(0, 20),
+            spells,
+            false,
+            championId
+          ),
           msg.withBot
-            ? createPlayerState(1, 'Corporate Mundo (Bot)', ['flash', 'ghost'], true)
+            ? createPlayerState(1, botChamp.defaultBotName, ['flash', 'ghost'], true, botChampionId)
             : null
         ],
         projectiles: [],
+        groundZones: [],
         events: []
       };
 
@@ -449,11 +469,14 @@ wss.on('connection', (ws: WebSocket) => {
       }
 
       const spells = validateSpells(msg.spells);
+      const championId = normalizeChampionId(msg.championId, DEFAULT_CHAMPION_ID);
+      const champ = getChampionConfig(championId);
       room.players[assignedSlot] = createPlayerState(
         assignedSlot,
-        (msg.name || `Mundo #${assignedSlot + 1}`).slice(0, 20),
+        (msg.name || `${champ.name} #${assignedSlot + 1}`).slice(0, 20),
         spells,
-        false
+        false,
+        championId
       );
 
       client.roomId = roomId;
@@ -477,6 +500,22 @@ wss.on('connection', (ws: WebSocket) => {
     if (!room || client.slot === null) return;
     const player = room.players[client.slot];
     if (!player) return;
+
+    if (msg.type === 'select_champion') {
+      if (room.state !== 'lobby') return;
+      setPlayerChampion(player, msg.championId);
+      broadcastToRoom(room, serializeRoomLobby(room));
+      return;
+    }
+
+    if (msg.type === 'select_bot_champion') {
+      if (client.slot !== 0 || room.state !== 'lobby') return;
+      const botPlayer = room.players[1];
+      if (!botPlayer || !botPlayer.isBot) return;
+      setPlayerChampion(botPlayer, msg.championId);
+      broadcastToRoom(room, serializeRoomLobby(room));
+      return;
+    }
 
     if (msg.type === 'select_spells') {
       if (room.state !== 'lobby') return;
@@ -502,8 +541,9 @@ wss.on('connection', (ws: WebSocket) => {
       if (client.slot !== 0 || room.state !== 'lobby') return;
       if (room.players[1] && !room.players[1].isBot) return;
       room.botEnabled = !room.botEnabled;
+      const botChamp = getChampionConfig(DEFAULT_CHAMPION_ID);
       room.players[1] = room.botEnabled
-        ? createPlayerState(1, 'Dr. Mundo Bot', ['flash', 'ghost'], true)
+        ? createPlayerState(1, botChamp.defaultBotName, ['flash', 'ghost'], true, botChamp.id)
         : null;
       broadcastToRoom(room, serializeRoomLobby(room));
       return;
@@ -543,8 +583,8 @@ wss.on('connection', (ws: WebSocket) => {
       room.winnerSlot = undefined;
       room.players[0].score = 0;
       room.players[1].score = 0;
-      room.players[0].stats = { cleaversThrown: 0, cleaversHit: 0, damageDealt: 0 };
-      room.players[1].stats = { cleaversThrown: 0, cleaversHit: 0, damageDealt: 0 };
+      room.players[0].stats = { abilitiesCast: 0, abilitiesHit: 0, damageDealt: 0 };
+      room.players[1].stats = { abilitiesCast: 0, abilitiesHit: 0, damageDealt: 0 };
       resetRoundState(room);
       room.state = 'countdown';
       room.countdownTimer = 3.0;
@@ -557,6 +597,8 @@ wss.on('connection', (ws: WebSocket) => {
         isBotMatch: Boolean(room.players[1]?.isBot),
         bestOf: room.settings.bestOf,
         cooldownMode: room.settings.cooldownMode,
+        p0Champion: room.players[0].championId,
+        p1Champion: room.players[1].championId,
         p0Spells: room.players[0].spells,
         p1Spells: room.players[1].spells
       });
@@ -568,6 +610,7 @@ wss.on('connection', (ws: WebSocket) => {
       room.state = 'lobby';
       room.winnerSlot = undefined;
       room.projectiles = [];
+      room.groundZones = [];
       for (const p of room.players) {
         if (p && !p.isBot) p.ready = false;
       }
@@ -576,11 +619,12 @@ wss.on('connection', (ws: WebSocket) => {
     }
 
     if (msg.type === 'move') {
-      if (room.state !== 'playing' || !player.alive) return;
+      if (room.state !== 'playing' || !player.alive || player.knockupTimer > 0) return;
       const tx = Number(msg.x);
       const tz = Number(msg.z);
       if (Number.isFinite(tx) && Number.isFinite(tz)) {
-        const clamped = clampToBaronPitHalf(tx, tz, player.slot);
+        const champ = getChampionConfig(player.championId);
+        const clamped = clampToBaronPitHalf(tx, tz, player.slot, champ.stats.hitboxRadius);
         player.targetX = clamped.x;
         player.targetZ = clamped.z;
       }
@@ -599,7 +643,7 @@ wss.on('connection', (ws: WebSocket) => {
       const tx = Number(msg.x);
       const tz = Number(msg.z);
       if (Number.isFinite(tx) && Number.isFinite(tz)) {
-        castInfectedBonesaw(room, player, tx, tz);
+        castPrimaryAbility(room, player, tx, tz);
       }
       return;
     }

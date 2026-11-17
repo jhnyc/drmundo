@@ -1,12 +1,39 @@
 import fs from 'fs';
 import path from 'path';
+import { normalizeChampionId } from '../shared/champions/index.js';
 import type { GameRoom, ServerPlayerState } from './types.js';
 
 export const RESTORED_ROOM_TTL_MS = 5 * 60 * 1000;
 
+interface LegacyStats {
+  abilitiesCast?: number;
+  abilitiesHit?: number;
+  cleaversThrown?: number;
+  cleaversHit?: number;
+  damageDealt?: number;
+}
+
 interface PersistedRoomsFile {
   savedAt: number;
   rooms: Array<Omit<GameRoom, 'clients' | 'events'>>;
+}
+
+function hydratePlayer(raw: ServerPlayerState | null): ServerPlayerState | null {
+  if (!raw) return null;
+  const legacyStats = (raw.stats || {}) as LegacyStats;
+  return {
+    ...raw,
+    championId: normalizeChampionId(raw.championId),
+    slowPercent: raw.slowPercent ?? 0,
+    knockupTimer: raw.knockupTimer ?? 0,
+    knockupDuration: raw.knockupDuration ?? 0,
+    stats: {
+      abilitiesCast: legacyStats.abilitiesCast ?? legacyStats.cleaversThrown ?? 0,
+      abilitiesHit: legacyStats.abilitiesHit ?? legacyStats.cleaversHit ?? 0,
+      damageDealt: legacyStats.damageDealt ?? 0
+    },
+    awaitingReconnect: raw.isBot ? raw.awaitingReconnect : true
+  };
 }
 
 export class RoomPersistence {
@@ -67,20 +94,17 @@ export class RoomPersistence {
         if (!saved || !saved.id) continue;
         if (now - (parsed.savedAt || 0) > RESTORED_ROOM_TTL_MS) continue;
         const players: [ServerPlayerState | null, ServerPlayerState | null] = [
-          saved.players?.[0] || null,
-          saved.players?.[1] || null
+          hydratePlayer(saved.players?.[0] || null),
+          hydratePlayer(saved.players?.[1] || null)
         ];
-        for (const p of players) {
-          if (p && !p.isBot) {
-            p.awaitingReconnect = true;
-          }
-        }
         rooms.set(saved.id, {
           ...saved,
+          nextZoneId: saved.nextZoneId ?? 1,
           clients: [],
           events: [],
           players,
           projectiles: Array.isArray(saved.projectiles) ? saved.projectiles : [],
+          groundZones: Array.isArray(saved.groundZones) ? saved.groundZones : [],
           restoredAt: now
         });
       }
