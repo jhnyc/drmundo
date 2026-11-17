@@ -7,7 +7,8 @@ import {
   getDropdownValue,
   initHexDropdowns,
   showToast,
-  updateFloatingHealthBars
+  updateFloatingHealthBars,
+  updatePerformanceHud
 } from './hud.js';
 import { connectWebSocket, getShareableRoomUrl, sendWs } from './network.js';
 import {
@@ -294,10 +295,23 @@ void initAllAssets();
 connectWebSocket();
 
 let lastFrameTime = performance.now();
+let fpsWindowStart = lastFrameTime;
+let fpsFrameCount = 0;
 function animate(now: number): void {
   requestAnimationFrame(animate);
   const dt = Math.min(0.05, (now - lastFrameTime) / 1000);
   lastFrameTime = now;
+
+  fpsFrameCount += 1;
+  const fpsElapsed = now - fpsWindowStart;
+  if (fpsElapsed >= 500) {
+    if (fpsElapsed <= 2000) {
+      state.fps = Math.round((fpsFrameCount * 1000) / fpsElapsed);
+      updatePerformanceHud();
+    }
+    fpsFrameCount = 0;
+    fpsWindowStart = now;
+  }
 
   for (const m of wardMixers) {
     m.update(dt);

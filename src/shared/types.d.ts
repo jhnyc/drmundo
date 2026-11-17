@@ -151,6 +151,10 @@ export type ServerToClientMessage =
       events: GameEvent[];
     }
   | {
+      type: 'pong';
+      t: number;
+    }
+  | {
       type: 'state_snapshot';
       state: RoomState;
       round: number;
@@ -191,4 +195,5 @@ export type ClientToServerMessage =
   | { type: 'stop' }
   | { type: 'cast_q'; x: number; z: number }
   | { type: 'cast_spell'; spellIndex: number; x: number; z: number }
-  | { type: 'emote'; emote: EmoteKey };
+  | { type: 'emote'; emote: EmoteKey }
+  | { type: 'ping'; t: number };

@@ -35,7 +35,9 @@ export const state = {
     showSkillshotIndicator: false,
     serverPlayers: [null, null],
     serverProjectiles: [],
-    assetsLoaded: false
+    assetsLoaded: false,
+    fps: null,
+    pingMs: null
 };
 export function getEl(id) {
     return document.getElementById(id);

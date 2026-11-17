@@ -1,6 +1,6 @@
 import { audio } from './audio.js';
 import { mundoRigs } from './champion.js';
-import { showAnnouncerBanner, showToast, spawnFloatingCombatText, updateInGameHud } from './hud.js';
+import { showAnnouncerBanner, showToast, spawnFloatingCombatText, updateInGameHud, updatePerformanceHud } from './hud.js';
 import { SPELL_ICONS, SPELL_NAMES, getEl, state } from './state.js';
 import { spawnFlashVfx, spawnGhostVfx, spawnHealVfx, spawnRingBurstVfx } from './vfx.js';
 export function getShareableRoomUrl(includePasscode = true) {
@@ -16,12 +16,36 @@ export function sendWs(payload) {
         state.ws.send(JSON.stringify(payload));
     }
 }
+const PING_INTERVAL_MS = 1000;
+let pingIntervalId = null;
+function sendPing() {
+    if (!document.hidden && state.connected) {
+        sendWs({ type: 'ping', t: performance.now() });
+    }
+}
+function stopPingLoop() {
+    if (pingIntervalId !== null) {
+        clearInterval(pingIntervalId);
+        pingIntervalId = null;
+    }
+}
+function startPingLoop() {
+    stopPingLoop();
+    sendPing();
+    pingIntervalId = setInterval(sendPing, PING_INTERVAL_MS);
+}
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && state.connected) {
+        sendPing();
+    }
+});
 export function connectWebSocket() {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${proto}//${window.location.host}`);
     state.ws = ws;
     ws.addEventListener('open', () => {
         state.connected = true;
+        startPingLoop();
         const params = new URLSearchParams(window.location.search);
         const roomParam = params.get('room');
         const passParam = params.get('pass') || '';
@@ -44,7 +68,12 @@ export function connectWebSocket() {
         handleServerMessage(msg);
     });
     ws.addEventListener('close', () => {
+        if (state.ws !== ws)
+            return;
         state.connected = false;
+        state.pingMs = null;
+        stopPingLoop();
+        updatePerformanceHud();
         setTimeout(connectWebSocket, 1500);
     });
 }
@@ -192,6 +221,13 @@ function handleGameEvents(events = []) {
     }
 }
 export function handleServerMessage(msg) {
+    if (msg.type === 'pong') {
+        if (typeof msg.t === 'number' && Number.isFinite(msg.t)) {
+            state.pingMs = Math.max(0, Math.round(performance.now() - msg.t));
+            updatePerformanceHud();
+        }
+        return;
+    }
     if (msg.type === 'error_msg') {
         showToast(msg.message || 'Error');
         if (msg.code === 'INVALID_PASSCODE' && msg.roomId) {

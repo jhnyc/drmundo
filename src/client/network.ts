@@ -11,7 +11,8 @@ import {
   showAnnouncerBanner,
   showToast,
   spawnFloatingCombatText,
-  updateInGameHud
+  updateInGameHud,
+  updatePerformanceHud
 } from './hud.js';
 import { SPELL_ICONS, SPELL_NAMES, getEl, state } from './state.js';
 import {
@@ -36,6 +37,34 @@ export function sendWs(payload: ClientToServerMessage): void {
   }
 }
 
+const PING_INTERVAL_MS = 1000;
+let pingIntervalId: ReturnType<typeof setInterval> | null = null;
+
+function sendPing(): void {
+  if (!document.hidden && state.connected) {
+    sendWs({ type: 'ping', t: performance.now() });
+  }
+}
+
+function stopPingLoop(): void {
+  if (pingIntervalId !== null) {
+    clearInterval(pingIntervalId);
+    pingIntervalId = null;
+  }
+}
+
+function startPingLoop(): void {
+  stopPingLoop();
+  sendPing();
+  pingIntervalId = setInterval(sendPing, PING_INTERVAL_MS);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.connected) {
+    sendPing();
+  }
+});
+
 export function connectWebSocket(): void {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${proto}//${window.location.host}`);
@@ -43,6 +72,7 @@ export function connectWebSocket(): void {
 
   ws.addEventListener('open', () => {
     state.connected = true;
+    startPingLoop();
 
     const params = new URLSearchParams(window.location.search);
     const roomParam = params.get('room');
@@ -68,7 +98,11 @@ export function connectWebSocket(): void {
   });
 
   ws.addEventListener('close', () => {
+    if (state.ws !== ws) return;
     state.connected = false;
+    state.pingMs = null;
+    stopPingLoop();
+    updatePerformanceHud();
     setTimeout(connectWebSocket, 1500);
   });
 }
@@ -224,6 +258,14 @@ function handleGameEvents(events: GameEvent[] = []): void {
 }
 
 export function handleServerMessage(msg: ServerToClientMessage): void {
+  if (msg.type === 'pong') {
+    if (typeof msg.t === 'number' && Number.isFinite(msg.t)) {
+      state.pingMs = Math.max(0, Math.round(performance.now() - msg.t));
+      updatePerformanceHud();
+    }
+    return;
+  }
+
   if (msg.type === 'error_msg') {
     showToast(msg.message || 'Error');
     if (msg.code === 'INVALID_PASSCODE' && msg.roomId) {

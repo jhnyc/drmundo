@@ -47,6 +47,8 @@ export interface ClientState {
   serverPlayers: [PlayerSnapshot | null, PlayerSnapshot | null];
   serverProjectiles: ProjectileSnapshot[];
   assetsLoaded: boolean;
+  fps: number | null;
+  pingMs: number | null;
 }
 
 export const state: ClientState = {
@@ -68,7 +70,9 @@ export const state: ClientState = {
   showSkillshotIndicator: false,
   serverPlayers: [null, null],
   serverProjectiles: [],
-  assetsLoaded: false
+  assetsLoaded: false,
+  fps: null,
+  pingMs: null
 };
 
 export function getEl<T extends HTMLElement = HTMLElement>(id: string): T {

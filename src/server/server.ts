@@ -256,6 +256,13 @@ wss.on('connection', (ws: WebSocket) => {
       return;
     }
 
+    if (msg.type === 'ping') {
+      if (typeof msg.t === 'number' && Number.isFinite(msg.t)) {
+        sendClientMessage(ws, { type: 'pong', t: msg.t });
+      }
+      return;
+    }
+
     if (msg.type === 'check_room') {
       const code = (msg.roomId || '').trim().toUpperCase();
       const room = rooms.get(code);

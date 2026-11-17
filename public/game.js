@@ -1,6 +1,6 @@
 import { audio } from './audio.js';
 import { loadCleaverProjectileTemplate, mundoRigs } from './champion.js';
-import { bindSpellPickerEvents, getDropdownValue, initHexDropdowns, showToast, updateFloatingHealthBars } from './hud.js';
+import { bindSpellPickerEvents, getDropdownValue, initHexDropdowns, showToast, updateFloatingHealthBars, updatePerformanceHud } from './hud.js';
 import { connectWebSocket, getShareableRoomUrl, sendWs } from './network.js';
 import { buildBaronPitEnvironment, camera, groundRayPlane, loadVfxTextures, raycaster, renderer, scene, updateCameraTransform, voidParticles, wardMixers } from './scene.js';
 import { getEl, state } from './state.js';
@@ -252,10 +252,22 @@ async function initAllAssets() {
 void initAllAssets();
 connectWebSocket();
 let lastFrameTime = performance.now();
+let fpsWindowStart = lastFrameTime;
+let fpsFrameCount = 0;
 function animate(now) {
     requestAnimationFrame(animate);
     const dt = Math.min(0.05, (now - lastFrameTime) / 1000);
     lastFrameTime = now;
+    fpsFrameCount += 1;
+    const fpsElapsed = now - fpsWindowStart;
+    if (fpsElapsed >= 500) {
+        if (fpsElapsed <= 2000) {
+            state.fps = Math.round((fpsFrameCount * 1000) / fpsElapsed);
+            updatePerformanceHud();
+        }
+        fpsFrameCount = 0;
+        fpsWindowStart = now;
+    }
     for (const m of wardMixers) {
         m.update(dt);
     }

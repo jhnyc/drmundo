@@ -113,7 +113,9 @@ function getHudDom() {
             imgD: getEl('hud-img-d'),
             imgF: getEl('hud-img-f'),
             cdD: getEl('hud-cd-d'),
-            cdF: getEl('hud-cd-f')
+            cdF: getEl('hud-cd-f'),
+            fpsValue: getEl('hud-fps-value'),
+            pingValue: getEl('hud-ping-value')
         };
     }
     return hudDom;
@@ -218,6 +220,40 @@ export function updateInGameHud() {
     else if (hudPrev.cdFVis !== '0') {
         dom.cdF.classList.add('hidden');
         hudPrev.cdFVis = '0';
+    }
+}
+function getPerfClass(kind, value) {
+    if (value === null)
+        return 'perf-value';
+    if (kind === 'fps') {
+        if (value >= 50)
+            return 'perf-value perf-good';
+        if (value >= 30)
+            return 'perf-value perf-warn';
+        return 'perf-value perf-bad';
+    }
+    if (value < 60)
+        return 'perf-value perf-good';
+    if (value < 120)
+        return 'perf-value perf-warn';
+    return 'perf-value perf-bad';
+}
+/** Update the top-right FPS and ping readout using dirty-checked DOM writes. */
+export function updatePerformanceHud() {
+    const dom = getHudDom();
+    const fpsText = state.fps === null ? '--' : `${state.fps}`;
+    const pingText = state.pingMs === null ? '-- ms' : `${state.pingMs} ms`;
+    const fpsClass = getPerfClass('fps', state.fps);
+    const pingClass = getPerfClass('ping', state.pingMs);
+    setTextIfChanged('perfFps', dom.fpsValue, fpsText);
+    setTextIfChanged('perfPing', dom.pingValue, pingText);
+    if (hudPrev.perfFpsCls !== fpsClass) {
+        dom.fpsValue.className = fpsClass;
+        hudPrev.perfFpsCls = fpsClass;
+    }
+    if (hudPrev.perfPingCls !== pingClass) {
+        dom.pingValue.className = pingClass;
+        hudPrev.perfPingCls = pingClass;
     }
 }
 let announcerTimeout = null;
