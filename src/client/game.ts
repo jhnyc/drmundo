@@ -14,6 +14,7 @@ import {
 } from './hud.js';
 import { connectWebSocket, getShareableRoomUrl, sendWs } from './network.js';
 import {
+  MAX_RENDER_PIXEL_RATIO,
   buildBaronPitEnvironment,
   camera,
   groundRayPlane,
@@ -305,6 +306,7 @@ window.addEventListener('keyup', (e: KeyboardEvent) => {
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_RENDER_PIXEL_RATIO));
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 

@@ -140,11 +140,12 @@ export class ChampionRig {
         const mesh = child as THREE.Mesh;
         mesh.frustumCulled = false;
         mesh.castShadow = true;
-        mesh.receiveShadow = true;
+        mesh.receiveShadow = false;
         if (mesh.material && !Array.isArray(mesh.material)) {
           const mat = mesh.material.clone() as THREE.MeshStandardMaterial;
           mat.side = THREE.DoubleSide;
           mesh.material = mat;
+          mesh.receiveShadow = (mat as THREE.Material).type !== 'MeshBasicMaterial';
           const ud = (mat.userData || {}) as { visible?: boolean; hash?: number };
           if (ud.visible === false) {
             mesh.visible = false;

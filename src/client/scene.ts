@@ -6,17 +6,18 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { INV_SQRT2, LOL_SCALE, PIT_RADIUS, getEl, state } from './state.js';
 
 const container = getEl<HTMLDivElement>('game-canvas-container');
+export const MAX_RENDER_PIXEL_RATIO = 1.5;
 export const renderer = new THREE.WebGLRenderer({
   antialias: true,
   powerPreference: 'high-performance'
 });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_RENDER_PIXEL_RATIO));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 container.appendChild(renderer.domElement);
 
 export const scene = new THREE.Scene();
@@ -56,7 +57,7 @@ scene.add(ambientLight);
 const dirLight = new THREE.DirectionalLight(0xfff4e0, 1.85);
 dirLight.position.set(-700, 1900, 950);
 dirLight.castShadow = true;
-dirLight.shadow.mapSize.set(2048, 2048);
+dirLight.shadow.mapSize.set(1024, 1024);
 dirLight.shadow.camera.near = 200;
 dirLight.shadow.camera.far = 4500;
 const dCam = 1350;
@@ -98,7 +99,7 @@ export let voidParticles: THREE.Points | null = null;
 export async function buildBaronPitEnvironment(): Promise<void> {
   const groundTex = await textureLoader.loadAsync('/assets/map/baron_pit_ground_clean.png');
   groundTex.colorSpace = THREE.SRGBColorSpace;
-  groundTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  groundTex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
 
   const planeSize = 4450;
   const offsetX = -(0.5908 - 0.5) * planeSize;
@@ -134,18 +135,15 @@ export async function buildBaronPitEnvironment(): Promise<void> {
   }
   groundGeo.computeVertexNormals();
 
-  const groundMat = new THREE.MeshStandardMaterial({
-    map: groundTex,
-    roughness: 0.88,
-    metalness: 0.06
+  const groundMat = new THREE.MeshLambertMaterial({
+    map: groundTex
   });
   const groundMesh = new THREE.Mesh(groundGeo, groundMat);
   groundMesh.receiveShadow = true;
   arenaGroup.add(groundMesh);
 
   try {
-    const [, sightWardObj, sightWardTex] = await Promise.all([
-      gltfLoader.loadAsync('/assets/models/jammerdevice.glb'),
+    const [sightWardObj, sightWardTex] = await Promise.all([
       objLoader.loadAsync('/assets/models/sightward.obj'),
       textureLoader.loadAsync('/assets/models/sightward_tx.png')
     ]);

@@ -3,7 +3,7 @@ import { audio } from './audio.js';
 import { championRigs, loadProjectileTemplate } from './champion.js';
 import { bindSpellPickerEvents, getDropdownValue, initChampionPicker, initHexDropdowns, showToast, updateFloatingHealthBars, updatePerformanceHud } from './hud.js';
 import { connectWebSocket, getShareableRoomUrl, sendWs } from './network.js';
-import { buildBaronPitEnvironment, camera, groundRayPlane, loadVfxTextures, raycaster, renderer, scene, updateCameraTransform, voidParticles, wardMixers } from './scene.js';
+import { MAX_RENDER_PIXEL_RATIO, buildBaronPitEnvironment, camera, groundRayPlane, loadVfxTextures, raycaster, renderer, scene, updateCameraTransform, voidParticles, wardMixers } from './scene.js';
 import { getEl, state } from './state.js';
 import { spawnGhostTrailStep, spawnMoveClickIndicator, syncGroundZones, syncProjectiles, updateSkillshotIndicator, updateTransientVfx } from './vfx.js';
 // ============================================================================
@@ -257,6 +257,7 @@ window.addEventListener('keyup', (e) => {
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_RENDER_PIXEL_RATIO));
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
 // ============================================================================
