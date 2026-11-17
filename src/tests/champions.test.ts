@@ -21,12 +21,15 @@ const PROJECT_ROOT = path.resolve(process.cwd());
 
 test('champion registry validates defaults and lookups', () => {
   assert.equal(DEFAULT_CHAMPION_ID, 'drmundo');
-  assert.ok(CHAMPION_LIST.length >= 1);
+  assert.ok(CHAMPION_LIST.length >= 2);
   assert.equal(isValidChampionId('drmundo'), true);
+  assert.equal(isValidChampionId('chogath'), true);
   assert.equal(isValidChampionId('nonexistent'), false);
   assert.equal(normalizeChampionId('  DrMundo  '), 'drmundo');
+  assert.equal(normalizeChampionId('CHOGATH'), 'chogath');
   assert.equal(normalizeChampionId('unknown'), DEFAULT_CHAMPION_ID);
   assert.equal(getChampionConfig('drmundo'), CHAMPION_REGISTRY.drmundo);
+  assert.equal(getChampionConfig('chogath'), CHAMPION_REGISTRY.chogath);
 });
 
 test('every registered champion has valid stats, abilities, and existing asset files', () => {

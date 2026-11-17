@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <radialGradient id="bgSq" cx="50%" cy="40%" r="65%">
+      <stop offset="0%" stop-color="#8b2fc9"/>
+      <stop offset="55%" stop-color="#3c115e"/>
+      <stop offset="100%" stop-color="#0a0314"/>
+    </radialGradient>
+    <linearGradient id="armorSq" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7635ad"/>
+      <stop offset="100%" stop-color="#250b3d"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" fill="url(#bgSq)"/>
+  <polygon points="20,40 10,12 40,28" fill="#2a0d45" stroke="#b666ff" stroke-width="2.5"/>
+  <polygon points="108,40 118,12 88,28" fill="#2a0d45" stroke="#b666ff" stroke-width="2.5"/>
+  <path d="M26 50 C26 20, 102 20, 102 50 L93 90 L64 112 L35 90 Z" fill="url(#armorSq)" stroke="#c780ff" stroke-width="2.5"/>
+  <path d="M38 75 Q64 102 90 75 Q64 87 38 75 Z" fill="#b31942"/>
+  <polygon points="44,78 49,90 54,81" fill="#f0e6d2"/>
+  <polygon points="58,82 64,95 70,82" fill="#f0e6d2"/>
+  <polygon points="74,81 79,90 84,78" fill="#f0e6d2"/>
+  <polygon points="36,53 56,57 44,67" fill="#ffe14d"/>
+  <polygon points="92,53 72,57 84,67" fill="#ffe14d"/>
+</svg>

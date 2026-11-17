@@ -1,4 +1,4 @@
-export type ChampionId = 'drmundo';
+export type ChampionId = 'drmundo' | 'chogath';
 
 export type SummonerSpellId = 'flash' | 'heal' | 'ghost';
 

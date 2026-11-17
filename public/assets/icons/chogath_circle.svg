@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="60%">
+      <stop offset="0%" stop-color="#8b2fc9"/>
+      <stop offset="55%" stop-color="#3c115e"/>
+      <stop offset="100%" stop-color="#0d0418"/>
+    </radialGradient>
+    <linearGradient id="carapace" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#69309c"/>
+      <stop offset="100%" stop-color="#220a38"/>
+    </linearGradient>
+  </defs>
+  <circle cx="64" cy="64" r="62" fill="url(#bg)" stroke="#c8aa6e" stroke-width="4"/>
+  <!-- Dorsal horns -->
+  <polygon points="24,42 14,16 42,30" fill="#2a0d45" stroke="#a652e0" stroke-width="2"/>
+  <polygon points="104,42 114,16 86,30" fill="#2a0d45" stroke="#a652e0" stroke-width="2"/>
+  <!-- Head carapace -->
+  <path d="M28 52 C28 24, 100 24, 100 52 L92 86 L64 106 L36 86 Z" fill="url(#carapace)" stroke="#b86bff" stroke-width="2.5"/>
+  <!-- Crimson maw & teeth -->
+  <path d="M40 74 Q64 98 88 74 Q64 84 40 74 Z" fill="#a8183b"/>
+  <polygon points="46,77 50,86 54,79" fill="#f0e6d2"/>
+  <polygon points="58,80 64,90 70,80" fill="#f0e6d2"/>
+  <polygon points="74,79 78,86 82,77" fill="#f0e6d2"/>
+  <!-- Glowing yellow Void eyes -->
+  <polygon points="39,55 55,58 46,66" fill="#ffdf4d"/>
+  <polygon points="89,55 73,58 82,66" fill="#ffdf4d"/>
+</svg>

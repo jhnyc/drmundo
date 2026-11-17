@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <radialGradient id="qGlow" cx="50%" cy="60%" r="55%">
+      <stop offset="0%" stop-color="#e38aff"/>
+      <stop offset="60%" stop-color="#7c1dc9"/>
+      <stop offset="100%" stop-color="#140522"/>
+    </radialGradient>
+  </defs>
+  <rect width="64" height="64" fill="url(#qGlow)"/>
+  <ellipse cx="32" cy="50" rx="22" ry="7" fill="none" stroke="#ff5e8a" stroke-width="2.5"/>
+  <polygon points="16,49 23,18 29,49" fill="#320b4d" stroke="#df9eff" stroke-width="1.5"/>
+  <polygon points="27,51 33,10 39,51" fill="#4f1278" stroke="#f0c4ff" stroke-width="1.8"/>
+  <polygon points="37,49 44,20 50,49" fill="#320b4d" stroke="#df9eff" stroke-width="1.5"/>
+</svg>

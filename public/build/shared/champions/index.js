@@ -1,7 +1,9 @@
+import { CHO_GATH_CONFIG } from './chogath.js';
 import { DR_MUNDO_CONFIG } from './drmundo.js';
 export const DEFAULT_CHAMPION_ID = 'drmundo';
 export const CHAMPION_REGISTRY = {
-    drmundo: DR_MUNDO_CONFIG
+    drmundo: DR_MUNDO_CONFIG,
+    chogath: CHO_GATH_CONFIG
 };
 export const CHAMPION_LIST = Object.values(CHAMPION_REGISTRY);
 export function isValidChampionId(value) {
