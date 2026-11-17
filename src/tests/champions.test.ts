@@ -19,6 +19,13 @@ import {
 
 const PROJECT_ROOT = path.resolve(process.cwd());
 
+function assertPublicAssetExists(url: string | undefined, label: string): void {
+  if (!url) return;
+  const cleanUrl = url.split('?')[0];
+  const diskPath = path.join(PROJECT_ROOT, 'public', cleanUrl.replace(/^\//, ''));
+  assert.ok(fs.existsSync(diskPath), `missing asset (${label}): ${url}`);
+}
+
 test('champion registry validates defaults and lookups', () => {
   assert.equal(DEFAULT_CHAMPION_ID, 'drmundo');
   assert.ok(CHAMPION_LIST.length >= 2);
@@ -41,15 +48,29 @@ test('every registered champion has valid stats, abilities, and existing asset f
     assert.ok(champ.q.range > 0, `${champ.id}: q.range must be > 0`);
     assert.ok(champ.q.radius > 0, `${champ.id}: q.radius must be > 0`);
 
-    const iconPaths = Object.values(champ.hud.icons);
-    for (const iconUrl of iconPaths) {
-      const diskPath = path.join(PROJECT_ROOT, 'public', iconUrl.replace(/^\//, ''));
-      assert.ok(fs.existsSync(diskPath), `${champ.id}: missing icon asset ${iconUrl}`);
+    for (const [slot, iconUrl] of Object.entries(champ.hud.icons)) {
+      assertPublicAssetExists(iconUrl, `${champ.id}.hud.icons.${slot}`);
     }
 
-    if (champ.model.kind === 'glb') {
-      const modelDiskPath = path.join(PROJECT_ROOT, 'public', champ.model.url.replace(/^\//, ''));
-      assert.ok(fs.existsSync(modelDiskPath), `${champ.id}: missing GLB ${champ.model.url}`);
+    assertPublicAssetExists(champ.model.url, `${champ.id}.model.url`);
+
+    if (champ.q.archetype === 'linear_projectile' && champ.q.projectileVisual.kind === 'obj_model') {
+      assertPublicAssetExists(champ.q.projectileVisual.objUrl, `${champ.id}.q.projectileVisual.objUrl`);
+      assertPublicAssetExists(
+        champ.q.projectileVisual.textureUrl,
+        `${champ.id}.q.projectileVisual.textureUrl`
+      );
+    }
+
+    if (champ.q.archetype === 'delayed_ground_aoe') {
+      const zv = champ.q.zoneVisual;
+      assertPublicAssetExists(zv.meshUrl, `${champ.id}.q.zoneVisual.meshUrl`);
+      assertPublicAssetExists(zv.meshTextureUrl, `${champ.id}.q.zoneVisual.meshTextureUrl`);
+      assertPublicAssetExists(zv.crackTextureUrl, `${champ.id}.q.zoneVisual.crackTextureUrl`);
+      assertPublicAssetExists(zv.indicatorTextureUrl, `${champ.id}.q.zoneVisual.indicatorTextureUrl`);
+      assertPublicAssetExists(zv.smokeTextureUrl, `${champ.id}.q.zoneVisual.smokeTextureUrl`);
+      assertPublicAssetExists(zv.auraTextureUrl, `${champ.id}.q.zoneVisual.auraTextureUrl`);
+      assertPublicAssetExists(zv.rockTextureUrl, `${champ.id}.q.zoneVisual.rockTextureUrl`);
     }
 
     const audioGroups = [
@@ -65,9 +86,7 @@ test('every registered champion has valid stats, abilities, and existing asset f
     for (const urls of audioGroups) {
       if (!urls) continue;
       for (const rawUrl of urls) {
-        const cleanUrl = rawUrl.split('?')[0];
-        const diskPath = path.join(PROJECT_ROOT, 'public', cleanUrl.replace(/^\//, ''));
-        assert.ok(fs.existsSync(diskPath), `${champ.id}: missing audio asset ${rawUrl}`);
+        assertPublicAssetExists(rawUrl, `${champ.id}.audio`);
       }
     }
   }

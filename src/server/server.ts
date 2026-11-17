@@ -120,6 +120,7 @@ function serializeRoomLobby(room: GameRoom): RoomLobbyPayload {
   return {
     type: 'room_update',
     roomId: room.id,
+    championId: room.championId,
     hasPasscode: Boolean(room.passcode && room.passcode.length > 0),
     passcode: room.passcode || '',
     state: room.state,
@@ -322,9 +323,7 @@ wss.on('connection', (ws: WebSocket) => {
       const passcode = (msg.passcode || '').trim();
       const spells = validateSpells(msg.spells);
       const championId = normalizeChampionId(msg.championId, DEFAULT_CHAMPION_ID);
-      const botChampionId = normalizeChampionId(msg.botChampionId, DEFAULT_CHAMPION_ID);
-      const hostChamp = getChampionConfig(championId);
-      const botChamp = getChampionConfig(botChampionId);
+      const champ = getChampionConfig(championId);
       const cooldownMode: CooldownMode = msg.cooldownMode === 'standard' ? 'standard' : 'fast';
       const settings: RoomSettings = {
         bestOf: parseBestOf(msg.bestOf),
@@ -334,6 +333,7 @@ wss.on('connection', (ws: WebSocket) => {
       const room: GameRoom = {
         id: roomId,
         passcode,
+        championId,
         state: 'lobby',
         round: 1,
         matchTime: 0,
@@ -349,13 +349,13 @@ wss.on('connection', (ws: WebSocket) => {
         players: [
           createPlayerState(
             0,
-            (msg.name || hostChamp.defaultPlayerName).slice(0, 20),
+            (msg.name || champ.defaultPlayerName).slice(0, 20),
             spells,
             false,
             championId
           ),
           msg.withBot
-            ? createPlayerState(1, botChamp.defaultBotName, ['flash', 'ghost'], true, botChampionId)
+            ? createPlayerState(1, champ.defaultBotName, ['flash', 'ghost'], true, championId)
             : null
         ],
         projectiles: [],
@@ -469,14 +469,13 @@ wss.on('connection', (ws: WebSocket) => {
       }
 
       const spells = validateSpells(msg.spells);
-      const championId = normalizeChampionId(msg.championId, DEFAULT_CHAMPION_ID);
-      const champ = getChampionConfig(championId);
+      const champ = getChampionConfig(room.championId);
       room.players[assignedSlot] = createPlayerState(
         assignedSlot,
         (msg.name || `${champ.name} #${assignedSlot + 1}`).slice(0, 20),
         spells,
         false,
-        championId
+        room.championId
       );
 
       client.roomId = roomId;
@@ -502,17 +501,12 @@ wss.on('connection', (ws: WebSocket) => {
     if (!player) return;
 
     if (msg.type === 'select_champion') {
-      if (room.state !== 'lobby') return;
-      setPlayerChampion(player, msg.championId);
-      broadcastToRoom(room, serializeRoomLobby(room));
-      return;
-    }
-
-    if (msg.type === 'select_bot_champion') {
       if (client.slot !== 0 || room.state !== 'lobby') return;
-      const botPlayer = room.players[1];
-      if (!botPlayer || !botPlayer.isBot) return;
-      setPlayerChampion(botPlayer, msg.championId);
+      const nextChampionId = normalizeChampionId(msg.championId, room.championId);
+      room.championId = nextChampionId;
+      for (const p of room.players) {
+        if (p) setPlayerChampion(p, nextChampionId);
+      }
       broadcastToRoom(room, serializeRoomLobby(room));
       return;
     }
@@ -541,7 +535,7 @@ wss.on('connection', (ws: WebSocket) => {
       if (client.slot !== 0 || room.state !== 'lobby') return;
       if (room.players[1] && !room.players[1].isBot) return;
       room.botEnabled = !room.botEnabled;
-      const botChamp = getChampionConfig(DEFAULT_CHAMPION_ID);
+      const botChamp = getChampionConfig(room.championId);
       room.players[1] = room.botEnabled
         ? createPlayerState(1, botChamp.defaultBotName, ['flash', 'ghost'], true, botChamp.id)
         : null;

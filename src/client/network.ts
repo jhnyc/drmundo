@@ -1,4 +1,4 @@
-import { CHAMPION_LIST, getChampionConfig } from '../shared/champions/index.js';
+import { getChampionConfig } from '../shared/champions/index.js';
 import type {
   ClientToServerMessage,
   GameEvent,
@@ -18,6 +18,7 @@ import {
 } from './hud.js';
 import { SPELL_ICONS, SPELL_NAMES, getEl, state } from './state.js';
 import {
+  spawnCastAuraVfx,
   spawnFlashVfx,
   spawnGhostVfx,
   spawnHealVfx,
@@ -91,7 +92,6 @@ export function connectWebSocket(): void {
         roomId: roomParam.toUpperCase(),
         passcode: passParam,
         name: getEl<HTMLInputElement>('input-player-name').value || defaultName,
-        championId: state.myChampionId,
         spells: state.mySpells
       });
     }
@@ -127,40 +127,29 @@ function renderEquippedPairHtml(
     .join('');
 }
 
-function renderBotChampionControls(activeChampionId: string): void {
-  const el = getEl('bot-champion-controls');
-  if (state.mySlot !== 0) {
-    el.classList.add('hidden');
-    return;
-  }
-  el.classList.remove('hidden');
-  el.innerHTML = `
-    <span class="bot-champion-label">Bot Champion</span>
-    <div class="bot-champion-pills">
-      ${CHAMPION_LIST.map(
-        (c) => `
-        <button type="button" class="bot-champ-pill clickable${c.id === activeChampionId ? ' active' : ''}" data-bot-champion="${c.id}">
-          ${c.name}
-        </button>
-      `
-      ).join('')}
-    </div>
-  `;
-
-  el.querySelectorAll<HTMLElement>('[data-bot-champion]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const cid = btn.getAttribute('data-bot-champion');
-      if (cid) {
-        sendWs({ type: 'select_bot_champion', championId: cid });
-      }
-    });
-  });
-}
-
 function updateLobbyDOM(lobby: RoomLobbyPayload): void {
   state.roomState = lobby.state;
   state.bestOf = lobby.settings?.bestOf || 3;
   state.botEnabled = lobby.botEnabled;
+  state.myChampionId = lobby.championId;
+
+  const matchChamp = getChampionConfig(lobby.championId);
+  const brandAvatar = document.getElementById('brand-avatar-img') as HTMLImageElement | null;
+  if (brandAvatar) {
+    brandAvatar.src = matchChamp.hud.icons.circle;
+  }
+
+  renderChampionPickerUI('lobby-champion-picker', 'lobby-champion-summary', lobby.championId);
+  renderChampionPickerUI('home-champion-picker', 'home-champion-summary', lobby.championId);
+
+  const lobbyChampSection = document.getElementById('lobby-champion-section');
+  if (lobbyChampSection) {
+    lobbyChampSection.classList.toggle('host-locked', state.mySlot !== 0);
+  }
+  const lobbySummaryEl = document.getElementById('lobby-champion-summary');
+  if (lobbySummaryEl && state.mySlot !== 0) {
+    lobbySummaryEl.textContent = `${matchChamp.name} — ${matchChamp.q.name} (Host selects)`;
+  }
 
   getEl('lobby-room-code').textContent = lobby.roomId;
   getEl('lobby-room-passcode').textContent = lobby.passcode ? lobby.passcode : 'NONE (OPEN)';
@@ -168,61 +157,44 @@ function updateLobbyDOM(lobby: RoomLobbyPayload): void {
 
   const p0 = lobby.players?.[0];
   const p1 = lobby.players?.[1];
-  const myLobbyPlayer = lobby.players?.[state.mySlot];
-  if (myLobbyPlayer) {
-    state.myChampionId = myLobbyPlayer.championId;
-    renderChampionPickerUI('lobby-champion-picker', 'lobby-champion-summary', myLobbyPlayer.championId);
-    renderChampionPickerUI('home-champion-picker', 'home-champion-summary', myLobbyPlayer.championId);
-  }
 
-  const c0 = getChampionConfig(p0?.championId);
-  getEl<HTMLImageElement>('slot-0-portrait-img').src = c0.hud.icons.square;
+  getEl<HTMLImageElement>('slot-0-portrait-img').src = matchChamp.hud.icons.square;
   getEl('slot-0-name').textContent = p0
     ? `${p0.name}${state.mySlot === 0 ? ' (You)' : ''}`
     : 'Waiting...';
-  getEl('slot-0-champ-sub').textContent = p0 ? `${c0.name} — ${c0.title}` : c0.name;
+  getEl('slot-0-champ-sub').textContent = `${matchChamp.name} — ${matchChamp.title}`;
   getEl('slot-0-spells').innerHTML = renderEquippedPairHtml(p0?.spells || ['flash', 'ghost']);
-  if (p0) {
-    void championRigs[0].load(p0.championId);
-  }
+  void championRigs[0].load(lobby.championId);
+  void championRigs[1].load(lobby.championId);
 
   const btnBot = getEl<HTMLButtonElement>('btn-toggle-bot');
-  const botControls = getEl('bot-champion-controls');
+  getEl<HTMLImageElement>('slot-1-portrait-img').src = matchChamp.hud.icons.square;
   if (p1) {
-    const c1 = getChampionConfig(p1.championId);
-    if (p1.isBot) state.botChampionId = p1.championId;
-    getEl<HTMLImageElement>('slot-1-portrait-img').src = c1.hud.icons.square;
     getEl('slot-1-name').textContent = `${p1.name}${state.mySlot === 1 ? ' (You)' : ''}`;
     getEl('slot-1-sub').textContent = p1.isBot
-      ? `AI Challenger (${c1.name}) • Ready for 1v1`
-      : `${c1.name} — ${c1.title}`;
+      ? `AI Challenger (${matchChamp.name}) • Ready for 1v1`
+      : `${matchChamp.name} — ${matchChamp.title}`;
     getEl('slot-1-spells').innerHTML = renderEquippedPairHtml(p1.spells || ['flash', 'ghost']);
-    void championRigs[1].load(p1.championId);
 
     if (p1.isBot && state.mySlot === 0) {
       btnBot.style.display = 'inline-block';
       btnBot.textContent = 'Remove AI Bot';
-      renderBotChampionControls(p1.championId);
     } else {
       btnBot.style.display = 'none';
-      botControls.classList.add('hidden');
     }
   } else {
-    const defaultChamp = getChampionConfig(state.botChampionId);
-    getEl<HTMLImageElement>('slot-1-portrait-img').src = defaultChamp.hud.icons.square;
     getEl('slot-1-name').textContent = 'Waiting for Opponent...';
     getEl('slot-1-sub').textContent = 'Share room link above or click + Add AI Bot';
     getEl('slot-1-spells').innerHTML = renderEquippedPairHtml(['flash', 'ghost']);
     btnBot.style.display = state.mySlot === 0 ? 'inline-block' : 'none';
     btnBot.textContent = '+ Add AI Bot';
-    botControls.classList.add('hidden');
   }
 
   const startBtn = getEl<HTMLButtonElement>('btn-start-match');
   const statusHint = getEl('lobby-status-hint');
   if (p0 && p1) {
     startBtn.disabled = false;
-    statusHint.textContent = 'Both challengers ready in the Baron Pit!';
+    statusHint.textContent = `Both ${matchChamp.name}s ready in the Baron Pit!`;
   } else {
     startBtn.disabled = false;
     statusHint.textContent = 'Waiting for Player 2 (or click + Add AI Bot to start now)';
@@ -260,6 +232,7 @@ function handleGameEvents(events: GameEvent[] = []): void {
       const rig = championRigs[ev.slot];
       if (rig) rig.triggerCastVisual();
       audio.playAbilityCast(ev.championId);
+      spawnCastAuraVfx(ev.championId, ev.x, ev.z);
     } else if (ev.type === 'zone_spawn') {
       audio.playZoneSpawn(ev.championId);
     } else if (ev.type === 'zone_erupt') {
@@ -280,7 +253,6 @@ function handleGameEvents(events: GameEvent[] = []): void {
         }
       }
     } else if (ev.type === 'q_miss') {
-      // Delayed ground zones already play zone_erupt visuals/audio
       if (ev.projId !== undefined) {
         const champ = getChampionConfig(ev.attackerChampionId);
         audio.playAbilityMiss(ev.attackerChampionId);
@@ -356,8 +328,8 @@ export function handleServerMessage(msg: ServerToClientMessage): void {
     state.roomId = msg.roomId;
     state.mySlot = msg.slot;
     state.passcode = msg.passcode || '';
-    const joinedChampId = msg.lobby.players[msg.slot]?.championId || state.myChampionId;
-    audio.playChooseVo(joinedChampId);
+    state.myChampionId = msg.lobby.championId;
+    audio.playChooseVo(msg.lobby.championId);
 
     const newUrl = new URL(window.location.href);
     newUrl.searchParams.set('room', state.roomId);

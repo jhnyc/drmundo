@@ -7,14 +7,11 @@ import { getChampionConfig } from '../shared/champions/index.js';
 import { DT } from '../shared/constants.js';
 import type { ChampionId } from '../shared/types.js';
 
-function createPlayingRoom(
-  p0Champ: ChampionId = 'drmundo',
-  p1Champ: ChampionId = 'drmundo',
-  p1IsBot = false
-): GameRoom {
+function createMirrorRoom(championId: ChampionId = 'drmundo', p1IsBot = false): GameRoom {
   const room: GameRoom = {
     id: 'TEST01',
     passcode: '',
+    championId,
     state: 'playing',
     round: 1,
     matchTime: 0,
@@ -28,8 +25,8 @@ function createPlayingRoom(
     settings: { bestOf: 3, cooldownMode: 'fast' },
     clients: [],
     players: [
-      createPlayerState(0, 'Blue', ['flash', 'ghost'], false, p0Champ),
-      createPlayerState(1, 'Red', ['flash', 'ghost'], p1IsBot, p1Champ)
+      createPlayerState(0, 'Blue', ['flash', 'ghost'], false, championId),
+      createPlayerState(1, 'Red', ['flash', 'ghost'], p1IsBot, championId)
     ],
     projectiles: [],
     groundZones: [],
@@ -39,8 +36,8 @@ function createPlayingRoom(
   return room;
 }
 
-test('Dr. Mundo Q windup, launch, hit, slow, HP refund, and kill parity', () => {
-  const room = createPlayingRoom('drmundo', 'drmundo');
+test('Dr. Mundo 1v1 mirror Q windup, launch, hit, slow, HP refund, and kill parity', () => {
+  const room = createMirrorRoom('drmundo');
   const p0 = room.players[0]!;
   const p1 = room.players[1]!;
   const mundo = getChampionConfig('drmundo');
@@ -84,25 +81,22 @@ test('Dr. Mundo Q windup, launch, hit, slow, HP refund, and kill parity', () => 
   assert.equal(room.state, 'round_end');
 });
 
-test("Cho'Gath Q Rupture casts across center line, telegraphs, erupts, knocks airborne, and respects range clamp", () => {
-  const room = createPlayingRoom('chogath', 'drmundo');
+test("Cho'Gath 1v1 mirror Q Rupture casts across center line, telegraphs, erupts, knocks airborne, and respects range clamp", () => {
+  const room = createMirrorRoom('chogath');
   const p0 = room.players[0]!;
   const p1 = room.players[1]!;
   const chogath = getChampionConfig('chogath');
-  const mundo = getChampionConfig('drmundo');
 
   assert.equal(chogath.q.archetype, 'delayed_ground_aoe');
   if (chogath.q.archetype !== 'delayed_ground_aoe') return;
 
   assert.equal(p0.hp, chogath.stats.maxHp);
-  assert.equal(p1.hp, mundo.stats.maxHp);
+  assert.equal(p1.hp, chogath.stats.maxHp);
 
-  // Target directly on opponent across the Baron Pit center line
   castPrimaryAbility(room, p0, p1.x, p1.z);
   assert.equal(p0.stats.abilitiesCast, 1);
   assert.equal(p0.hp, chogath.stats.maxHp, 'ChoGath Q has no HP cost');
 
-  // Step through castTime (0.25s = 15 ticks) -> zone_spawn should fire
   for (let i = 0; i < 18; i++) {
     stepRoomSimulation(room, DT);
   }
@@ -111,15 +105,14 @@ test("Cho'Gath Q Rupture casts across center line, telegraphs, erupts, knocks ai
   assert.equal(room.groundZones.length, 1);
   assert.equal(spawnEv.championId, 'chogath');
 
-  // Snapshot exposes groundZones for client telegraph rendering
   const snapDuringTelegraph = buildStateSnapshot(room);
   assert.equal(snapDuringTelegraph.type, 'state_snapshot');
   if (snapDuringTelegraph.type === 'state_snapshot') {
     assert.equal(snapDuringTelegraph.groundZones.length, 1);
     assert.equal(snapDuringTelegraph.players[0]?.championId, 'chogath');
+    assert.equal(snapDuringTelegraph.players[1]?.championId, 'chogath');
   }
 
-  // Step past delay (0.625s ~ 38 ticks) -> zone erupts and knocks Mundo airborne
   for (let i = 0; i < 45; i++) {
     stepRoomSimulation(room, DT);
   }
@@ -134,7 +127,6 @@ test("Cho'Gath Q Rupture casts across center line, telegraphs, erupts, knocks ai
   assert.ok(p1.knockupTimer > 0.5, 'Victim should be knocked airborne');
   assert.ok(p1.slowTimer > 1.0, 'Victim should be slowed after Rupture');
 
-  // Verify airborne prevents movement
   const pinnedX = p1.x;
   const pinnedZ = p1.z;
   p1.targetX = p1.x + 150;
@@ -143,7 +135,6 @@ test("Cho'Gath Q Rupture casts across center line, telegraphs, erupts, knocks ai
   assert.equal(p1.x, pinnedX);
   assert.equal(p1.z, pinnedZ);
 
-  // Verify range clamping when targeting far beyond max range
   p0.qCd = 0;
   p0.castTimer = 0;
   room.events = [];
@@ -157,13 +148,12 @@ test("Cho'Gath Q Rupture casts across center line, telegraphs, erupts, knocks ai
   assert.ok(distFromCaster <= chogath.q.range + 1, 'Rupture target must clamp to range');
 });
 
-test('Bot AI actively dodges out of Rupture ground zone and can cast as ChoGath', () => {
-  const room = createPlayingRoom('drmundo', 'chogath', true);
+test("Bot AI actively dodges out of Rupture ground zone in Cho'Gath mirror", () => {
+  const room = createMirrorRoom('chogath', true);
   const bot = room.players[1]!;
   const startX = bot.x;
   const startZ = bot.z;
 
-  // Place a hostile Rupture directly on the bot
   room.groundZones.push({
     id: 99,
     ownerSlot: 0,
@@ -181,7 +171,6 @@ test('Bot AI actively dodges out of Rupture ground zone and can cast as ChoGath'
     refundOnHit: 0
   });
 
-  // Step simulation; bot should set target outside the Rupture and move away
   for (let i = 0; i < 40; i++) {
     stepRoomSimulation(room, DT);
   }

@@ -1,3 +1,4 @@
+import { LOL_SCALE } from '../constants.js';
 import type { ChampionConfig } from './types.js';
 
 export const CHO_GATH_CONFIG: ChampionConfig = {
@@ -10,7 +11,7 @@ export const CHO_GATH_CONFIG: ChampionConfig = {
   accentColor: '#b84dff',
   accentHex: 0xb84dff,
   victoryLine: 'Nom nom nom! The Void devours the Baron Pit!',
-  fightBannerSub: 'RUPTURE THE EARTH & DODGE INCOMING SKILLSHOTS',
+  fightBannerSub: 'RUPTURE THE EARTH & DODGE INCOMING RUPTURES',
   stats: {
     maxHp: 1920,
     hpRegenPerSec: 9,
@@ -32,13 +33,13 @@ export const CHO_GATH_CONFIG: ChampionConfig = {
     accuracyLabel: 'Rupture Acc',
     hitsStatLabel: 'Rupture Hits',
     icons: {
-      circle: '/assets/icons/chogath_circle.svg',
-      square: '/assets/icons/chogath_square.svg',
-      passive: '/assets/icons/chogath_p.svg',
-      q: '/assets/icons/chogath_q.svg',
-      w: '/assets/icons/chogath_w.svg',
-      e: '/assets/icons/chogath_e.svg',
-      r: '/assets/icons/chogath_r.svg'
+      circle: '/assets/icons/chogath_circle.png',
+      square: '/assets/icons/chogath_square.png',
+      passive: '/assets/icons/chogath_p.png',
+      q: '/assets/icons/chogath_q.png',
+      w: '/assets/icons/chogath_w.png',
+      e: '/assets/icons/chogath_e.png',
+      r: '/assets/icons/chogath_r.png'
     },
     passive: {
       name: 'Carnivore',
@@ -50,17 +51,36 @@ export const CHO_GATH_CONFIG: ChampionConfig = {
       r: { name: 'Feast', description: 'Disabled in Baron Pit 1v1' }
     }
   },
-  // Replace with { kind: 'glb', url: '/assets/models/chogath.glb', ... } when a Cho'Gath GLB is added.
   model: {
-    kind: 'procedural',
-    preset: 'chogath_void_beast',
-    scale: 1.05
+    kind: 'glb',
+    url: '/assets/models/chogath.glb',
+    scale: LOL_SCALE * 0.9,
+    pelvisBones: ['pelvis', 'root'],
+    pelvisRootMotionFactor: 0.85,
+    castAnimDuration: 0.62,
+    clips: {
+      idle: { clipName: 'Idle1', fallbackClipName: 'Idle2', loop: 'repeat', timeScale: 1.0 },
+      run: { clipName: 'Run', loop: 'repeat', timeScale: 1.08 },
+      run_haste: { clipName: 'Run', loop: 'repeat', timeScale: 1.38 },
+      q_cast: {
+        clipName: 'Spell1',
+        loop: 'once',
+        clampWhenFinished: true,
+        timeScale: 1.45
+      },
+      death: { clipName: 'Death', loop: 'once', clampWhenFinished: true, timeScale: 1.0 },
+      taunt: { clipName: 'Taunt', loop: 'repeat', timeScale: 1.0 },
+      joke: { clipName: 'Taunt', fallbackClipName: 'Idle2', loop: 'repeat', timeScale: 1.0 },
+      dance: { clipName: 'Dance', loop: 'repeat', timeScale: 1.0 },
+      laugh: { clipName: 'Laugh', loop: 'repeat', timeScale: 1.0 },
+      recall: { clipName: 'Channel', fallbackClipName: 'Channel_Wndup', loop: 'repeat', timeScale: 1.0 }
+    }
   },
   q: {
     archetype: 'delayed_ground_aoe',
     name: 'Rupture',
     description:
-      'Ruptures the ground at the target location after a brief delay, launching enemies airborne for 0.85s and slowing them by 50%.',
+      'Ruptures the ground at the target location after a 0.625s delay, launching enemies airborne for 0.85s and slowing them by 50%.',
     costLabel: 'CD',
     hpCost: 0,
     refundOnHit: 0,
@@ -87,8 +107,16 @@ export const CHO_GATH_CONFIG: ChampionConfig = {
     zoneVisual: {
       kind: 'void_rupture',
       telegraphColorHex: 0xff2a55,
-      eruptColorHex: 0xc44dff,
-      spikeColorHex: 0x380f54
+      eruptColorHex: 0x9b3dff,
+      spikeColorHex: 0xf2e9ff,
+      meshUrl: '/assets/models/chogath_q_spikes.obj',
+      meshTextureUrl: '/assets/vfx/chogath_q_spike_tx.png',
+      meshBaseRadius: 116.5,
+      crackTextureUrl: '/assets/vfx/chogath_q_crack.png',
+      indicatorTextureUrl: '/assets/vfx/chogath_q_indicator.png',
+      smokeTextureUrl: '/assets/vfx/chogath_q_smokeray.png',
+      auraTextureUrl: '/assets/vfx/chogath_q_auraself.png',
+      rockTextureUrl: '/assets/vfx/chogath_q_rockshards.png'
     },
     vfx: {
       hitColorHex: 0xc44dff,
@@ -96,6 +124,11 @@ export const CHO_GATH_CONFIG: ChampionConfig = {
     }
   },
   audio: {
-    synthProfile: 'void_beast'
+    chooseVo: ['/assets/audio/chogath_choose_vo.ogg'],
+    tauntVo: ['/assets/audio/chogath_ban_vo.ogg'],
+    qCastSfx: ['/assets/audio/chogath_q_cast_sfx.ogg'],
+    qCastSfxVolume: 0.95,
+    zoneSpawnSfx: ['/assets/audio/chogath_q_zone_0.ogg'],
+    zoneEruptSfx: ['/assets/audio/chogath_q_erupt_0.ogg', '/assets/audio/chogath_q_erupt_1.ogg']
   }
 };

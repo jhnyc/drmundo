@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CHAMPION_LIST, getChampionConfig } from '../shared/champions/index.js';
 import type { ChampionId, CooldownMode } from '../shared/types.js';
 import { audio } from './audio.js';
-import { championRigs, loadProjectileTemplate } from './champion.js';
+import { championRigs, loadProjectileTemplate, loadZoneMeshTemplate } from './champion.js';
 import {
   bindSpellPickerEvents,
   getDropdownValue,
@@ -28,6 +28,7 @@ import {
 } from './scene.js';
 import { getEl, state } from './state.js';
 import {
+  loadChampionVfxTextures,
   spawnGhostTrailStep,
   spawnMoveClickIndicator,
   syncGroundZones,
@@ -50,9 +51,10 @@ const onChampionSelected = (championId: ChampionId): void => {
   }
 
   audio.playChooseVo(championId);
-  void championRigs[state.mySlot].load(championId);
+  void championRigs[0].load(championId);
+  void championRigs[1].load(championId);
 
-  if (state.roomId) {
+  if (state.roomId && state.mySlot === 0) {
     sendWs({ type: 'select_champion', championId });
     if (isDefaultName) {
       sendWs({ type: 'update_name', name: nextChamp.defaultPlayerName });
@@ -79,7 +81,6 @@ getEl('btn-create-room').addEventListener('click', () => {
     type: 'create_room',
     name: getEl<HTMLInputElement>('input-player-name').value.trim() || defaultName,
     championId: state.myChampionId,
-    botChampionId: state.botChampionId,
     passcode: getEl<HTMLInputElement>('input-create-passcode').value.trim(),
     bestOf: Number(getDropdownValue('dropdown-best-of') || 3),
     cooldownMode: (getDropdownValue('dropdown-cd-mode') || 'fast') as CooldownMode,
@@ -95,7 +96,6 @@ getEl('btn-practice-bot').addEventListener('click', () => {
     type: 'create_room',
     name: getEl<HTMLInputElement>('input-player-name').value.trim() || defaultName,
     championId: state.myChampionId,
-    botChampionId: state.botChampionId,
     passcode: getEl<HTMLInputElement>('input-create-passcode').value.trim(),
     bestOf: Number(getDropdownValue('dropdown-best-of') || 3),
     cooldownMode: (getDropdownValue('dropdown-cd-mode') || 'fast') as CooldownMode,
@@ -120,7 +120,6 @@ getEl('btn-join-room').addEventListener('click', () => {
     roomId: code,
     passcode: getEl<HTMLInputElement>('input-join-passcode').value.trim(),
     name: getEl<HTMLInputElement>('input-player-name').value.trim() || defaultName,
-    championId: state.myChampionId,
     spells: state.mySpells
   });
 });
@@ -317,18 +316,26 @@ async function initAllAssets(): Promise<void> {
   try {
     const projectileLoads = CHAMPION_LIST.filter(
       (c) => c.q.archetype === 'linear_projectile' && c.q.projectileVisual.kind === 'obj_model'
-    ).map((c) =>
-      loadProjectileTemplate(
-        c.q.archetype === 'linear_projectile' ? c.q.projectileVisual : { kind: 'energy_orb', radius: 50, coreColorHex: 0xffffff, glowColorHex: 0xffffff }
-      )
-    );
+    ).map((c) => {
+      if (c.q.archetype !== 'linear_projectile') return Promise.resolve(null);
+      return loadProjectileTemplate(c.q.projectileVisual);
+    });
+
+    const zoneMeshLoads = CHAMPION_LIST.filter(
+      (c) => c.q.archetype === 'delayed_ground_aoe' && c.q.zoneVisual.meshUrl
+    ).map((c) => {
+      if (c.q.archetype !== 'delayed_ground_aoe') return Promise.resolve(null);
+      return loadZoneMeshTemplate(c.q.zoneVisual);
+    });
 
     await Promise.all([
       loadVfxTextures(),
+      loadChampionVfxTextures(),
       buildBaronPitEnvironment(),
       ...projectileLoads,
+      ...zoneMeshLoads,
       championRigs[0].load(state.myChampionId),
-      championRigs[1].load(state.botChampionId)
+      championRigs[1].load(state.myChampionId)
     ]);
     state.assetsLoaded = true;
   } catch (err) {
@@ -391,7 +398,7 @@ function animate(now: number): void {
     championRigs[1].update(
       dt,
       {
-        championId: state.botChampionId,
+        championId: state.myChampionId,
         x: 300,
         z: 300,
         angle: -Math.PI * 0.75,

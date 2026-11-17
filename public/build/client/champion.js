@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { DEFAULT_CHAMPION_ID, getChampionConfig } from '../shared/champions/index.js';
-import { buildProceduralChampionRig } from './proceduralRigs.js';
 import { gltfLoader, objLoader, scene, textureLoader } from './scene.js';
 const _pelvisWorld = new THREE.Vector3();
 export class ChampionRig {
@@ -15,17 +14,14 @@ export class ChampionRig {
     activeAction = null;
     currentAnimKey = '';
     castHiddenMesh = null;
-    castHideTimer = 0;
+    castHoldTimer = 0;
     loadToken = 0;
-    proceduralRig = null;
-    animElapsed = 0;
-    castAnimTimer = 0;
     shadowDisc;
     bodyMaterials = [];
     flashTintTimer = 0;
     healTintTimer = 0;
     ghostTrailEmitTimer = 0;
-    lastEmissiveHex = -1;
+    lastTintHex = -1;
     lastEmissiveInt = -1;
     lastBodyOpacity = -1;
     constructor(slot, initialChampionId = DEFAULT_CHAMPION_ID) {
@@ -63,9 +59,8 @@ export class ChampionRig {
         this.currentAnimKey = '';
         this.pelvisNode = null;
         this.castHiddenMesh = null;
-        this.proceduralRig = null;
         this.bodyMaterials = [];
-        this.lastEmissiveHex = -1;
+        this.lastTintHex = -1;
         this.lastEmissiveInt = -1;
         this.lastBodyOpacity = -1;
         if (this.model) {
@@ -82,16 +77,6 @@ export class ChampionRig {
         const modelCfg = this.config.model;
         const shadowScale = Math.max(0.8, this.config.stats.hitboxRadius / 65);
         this.shadowDisc.scale.setScalar(shadowScale);
-        if (modelCfg.kind === 'procedural') {
-            this.clearCurrentModel();
-            const proc = buildProceduralChampionRig(modelCfg.preset, modelCfg.scale);
-            this.proceduralRig = proc;
-            this.model = proc.group;
-            this.bodyMaterials = proc.bodyMaterials;
-            this.root.add(this.model);
-            this.playAnim('idle', true);
-            return;
-        }
         const gltf = await gltfLoader.loadAsync(modelCfg.url);
         if (token !== this.loadToken)
             return;
@@ -142,16 +127,9 @@ export class ChampionRig {
         this.playAnim('idle', true);
     }
     playAnim(animKey, forceRestart = false) {
+        if (!this.mixer)
+            return;
         if (this.currentAnimKey === animKey && !forceRestart)
-            return;
-        if (this.proceduralRig) {
-            this.currentAnimKey = animKey;
-            if (animKey === 'q_cast') {
-                this.castAnimTimer = 0;
-            }
-            return;
-        }
-        if (!this.mixer || this.config.model.kind !== 'glb')
             return;
         const clipCfg = this.config.model.clips[animKey] || this.config.model.clips.idle;
         const clip = this.clips.get(clipCfg.clipName) ||
@@ -178,12 +156,11 @@ export class ChampionRig {
     }
     triggerCastVisual() {
         this.playAnim('q_cast', true);
-        this.castAnimTimer = 0;
-        if (this.config.model.kind === 'glb' && this.config.model.castMeshHide) {
-            this.castHideTimer = this.config.model.castMeshHide.totalDuration;
+        if (this.config.model.castMeshHide) {
+            this.castHoldTimer = this.config.model.castMeshHide.totalDuration;
         }
         else {
-            this.castHideTimer = Math.max(0.28, this.config.q.castTime);
+            this.castHoldTimer = this.config.model.castAnimDuration ?? Math.max(0.45, this.config.q.castTime);
         }
     }
     triggerFlashBlink(toX, toZ) {
@@ -195,23 +172,19 @@ export class ChampionRig {
         this.healTintTimer = 0.55;
     }
     update(dt, serverPlayer, onGhostTrailStep) {
-        this.animElapsed += dt;
-        if (this.currentAnimKey === 'q_cast') {
-            this.castAnimTimer += dt;
-        }
         if (serverPlayer?.championId && serverPlayer.championId !== this.championId) {
             void this.load(serverPlayer.championId);
         }
         if (this.mixer) {
             this.mixer.update(dt);
         }
-        const hideCfg = this.config.model.kind === 'glb' ? this.config.model.castMeshHide : undefined;
-        if (this.castHideTimer > 0) {
-            this.castHideTimer = Math.max(0, this.castHideTimer - dt);
+        const hideCfg = this.config.model.castMeshHide;
+        if (this.castHoldTimer > 0) {
+            this.castHoldTimer = Math.max(0, this.castHoldTimer - dt);
         }
         if (this.castHiddenMesh && hideCfg) {
-            if (this.castHideTimer > 0) {
-                this.castHiddenMesh.visible = this.castHideTimer > hideCfg.visibleBeforeRemaining;
+            if (this.castHoldTimer > 0) {
+                this.castHiddenMesh.visible = this.castHoldTimer > hideCfg.visibleBeforeRemaining;
             }
             else {
                 this.castHiddenMesh.visible = true;
@@ -231,7 +204,7 @@ export class ChampionRig {
         this.root.position.z += (serverPlayer.z - this.root.position.z) * lerpFactor;
         const diffAngle = Math.atan2(Math.sin(serverPlayer.angle - this.root.rotation.y), Math.cos(serverPlayer.angle - this.root.rotation.y));
         this.root.rotation.y += diffAngle * Math.min(1, dt * 18);
-        if (this.model && this.pelvisNode && this.config.model.kind === 'glb') {
+        if (this.model && this.pelvisNode) {
             this.root.updateMatrixWorld(true);
             this.pelvisNode.getWorldPosition(_pelvisWorld);
             this.root.worldToLocal(_pelvisWorld);
@@ -239,7 +212,7 @@ export class ChampionRig {
             this.model.position.x -= _pelvisWorld.x * factor;
             this.model.position.z -= _pelvisWorld.z * factor;
         }
-        // Airborne knockup arc (applies cleanly to both GLB & procedural champions)
+        // Airborne knockup arc (applies cleanly to any GLB champion)
         const knockupTimer = serverPlayer.knockupTimer ?? 0;
         const knockupDuration = serverPlayer.knockupDuration ?? 0;
         const baseShadowScale = Math.max(0.8, this.config.stats.hitboxRadius / 65);
@@ -256,45 +229,51 @@ export class ChampionRig {
             }
         }
         const lockRemaining = hideCfg ? hideCfg.lockAnimUntilRemaining : 0.05;
-        if (this.currentAnimKey === 'q_cast' && this.castHideTimer > lockRemaining) {
-            // Allow Q cast animation to play through release
+        if (this.currentAnimKey === 'q_cast' && this.castHoldTimer > lockRemaining) {
+            // Allow cast animation to play through release
         }
         else {
             this.playAnim(serverPlayer.anim || 'idle');
         }
-        if (this.proceduralRig) {
-            this.proceduralRig.animate(this.currentAnimKey || 'idle', dt, this.animElapsed, this.castAnimTimer);
-        }
         let emissiveHex = 0x000000;
+        let colorHex = 0xffffff;
         let emissiveInt = 0.0;
         let bodyOpacity = 1.0;
         if (this.flashTintTimer > 0) {
             emissiveHex = 0xffaa1d;
+            colorHex = 0xfff0b5;
             emissiveInt = (this.flashTintTimer / 0.3) * 1.65;
         }
         else if (this.healTintTimer > 0) {
             emissiveHex = 0x26e658;
+            colorHex = 0xc2ffd2;
             emissiveInt = (this.healTintTimer / 0.55) * 1.15;
         }
         else if (serverPlayer.ghostTimer > 0) {
             emissiveHex = 0x16a8ff;
+            colorHex = 0xd4f0ff;
             emissiveInt = 0.52 + Math.sin(performance.now() * 0.014) * 0.14;
             bodyOpacity = 0.86;
         }
         else if (serverPlayer.slowTimer > 0) {
             emissiveHex = 0x5c2d91;
+            colorHex = 0xdcc4ff;
             emissiveInt = 0.32;
         }
-        if (emissiveHex !== this.lastEmissiveHex ||
+        const tintKey = emissiveHex ^ (colorHex << 1);
+        if (tintKey !== this.lastTintHex ||
             Math.abs(emissiveInt - this.lastEmissiveInt) > 0.005 ||
             bodyOpacity !== this.lastBodyOpacity) {
-            this.lastEmissiveHex = emissiveHex;
+            this.lastTintHex = tintKey;
             this.lastEmissiveInt = emissiveInt;
             this.lastBodyOpacity = bodyOpacity;
             for (const mat of this.bodyMaterials) {
-                if (mat.emissive) {
+                if ('emissive' in mat && mat.emissive) {
                     mat.emissive.setHex(emissiveHex);
                     mat.emissiveIntensity = emissiveInt;
+                }
+                else {
+                    mat.color.setHex(colorHex);
                 }
                 if (bodyOpacity < 0.99) {
                     mat.transparent = true;
@@ -384,5 +363,72 @@ export async function loadProjectileTemplate(visual) {
         }
     })();
     projectileLoadingPromises.set(key, promise);
+    return promise;
+}
+const zoneMeshTemplateCache = new Map();
+const zoneMeshLoadingPromises = new Map();
+export function getCachedZoneMeshTemplate(championId) {
+    const champ = getChampionConfig(championId);
+    if (champ.q.archetype !== 'delayed_ground_aoe')
+        return null;
+    const vis = champ.q.zoneVisual;
+    if (!vis.meshUrl || !vis.meshTextureUrl)
+        return null;
+    const key = `${vis.meshUrl}|${vis.meshTextureUrl}`;
+    const cached = zoneMeshTemplateCache.get(key);
+    if (!cached) {
+        void loadZoneMeshTemplate(vis);
+        return null;
+    }
+    return cached;
+}
+export async function loadZoneMeshTemplate(vis) {
+    if (!vis.meshUrl || !vis.meshTextureUrl)
+        return null;
+    const key = `${vis.meshUrl}|${vis.meshTextureUrl}`;
+    const existing = zoneMeshTemplateCache.get(key);
+    if (existing)
+        return existing;
+    const inflight = zoneMeshLoadingPromises.get(key);
+    if (inflight)
+        return inflight;
+    const promise = (async () => {
+        try {
+            const [spikeObj, spikeTex] = await Promise.all([
+                objLoader.loadAsync(vis.meshUrl),
+                textureLoader.loadAsync(vis.meshTextureUrl)
+            ]);
+            spikeTex.colorSpace = THREE.SRGBColorSpace;
+            const group = new THREE.Group();
+            spikeObj.traverse((child) => {
+                if (child.isMesh) {
+                    const mesh = child;
+                    mesh.material = new THREE.MeshStandardMaterial({
+                        map: spikeTex,
+                        color: vis.spikeColorHex,
+                        emissive: new THREE.Color(vis.eruptColorHex),
+                        emissiveIntensity: 0.22,
+                        roughness: 0.45,
+                        metalness: 0.2,
+                        side: THREE.DoubleSide,
+                        transparent: true,
+                        opacity: 1
+                    });
+                    mesh.castShadow = true;
+                    mesh.receiveShadow = true;
+                }
+            });
+            group.add(spikeObj);
+            zoneMeshTemplateCache.set(key, group);
+            return group;
+        }
+        catch {
+            return null;
+        }
+        finally {
+            zoneMeshLoadingPromises.delete(key);
+        }
+    })();
+    zoneMeshLoadingPromises.set(key, promise);
     return promise;
 }

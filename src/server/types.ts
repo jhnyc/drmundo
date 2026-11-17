@@ -106,6 +106,7 @@ export interface ConnectedClient {
 export interface GameRoom {
   id: string;
   passcode: string;
+  championId: ChampionId;
   state: RoomState;
   round: number;
   matchTime: number;

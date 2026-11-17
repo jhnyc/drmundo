@@ -491,6 +491,9 @@ export function initChampionPicker(
 
   containerEl.querySelectorAll<HTMLElement>('.champion-option-card').forEach((card) => {
     card.addEventListener('click', () => {
+      if (containerId === 'lobby-champion-picker' && state.roomId && state.mySlot !== 0) {
+        return;
+      }
       audio.ensureContext();
       const cid = normalizeChampionId(card.getAttribute('data-champion'));
       state.myChampionId = cid;

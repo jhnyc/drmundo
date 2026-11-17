@@ -56,6 +56,7 @@ export interface RoomSummary {
 export interface RoomLobbyPayload {
   type: 'room_update';
   roomId: string;
+  championId: ChampionId;
   hasPasscode: boolean;
   passcode: string;
   state: RoomState;
@@ -243,7 +244,6 @@ export type ClientToServerMessage =
       customCode?: string;
       name?: string;
       championId?: string;
-      botChampionId?: string;
       passcode?: string;
       bestOf?: number;
       cooldownMode?: CooldownMode;
@@ -255,11 +255,9 @@ export type ClientToServerMessage =
       roomId?: string;
       passcode?: string;
       name?: string;
-      championId?: string;
       spells?: string[];
     }
   | { type: 'select_champion'; championId: string }
-  | { type: 'select_bot_champion'; championId: string }
   | { type: 'select_spells'; spells?: string[] }
   | { type: 'update_name'; name?: string }
   | { type: 'toggle_bot' }

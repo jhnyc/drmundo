@@ -1,6 +1,6 @@
 // ============================================================================
 // DATA-DRIVEN CHAMPION & SUMMONER SPELL AUDIO ENGINE
-// Plays official Riot .ogg files when configured, with WebAudio synth fallback
+// Preloads & plays official Riot Games .ogg files configured per champion
 // ============================================================================
 
 import { CHAMPION_LIST, getChampionConfig } from '../shared/champions/index.js';
@@ -181,11 +181,6 @@ export class GameAudioEngine {
     const champ = getChampionConfig(championId);
     if (champ.audio.chooseVo && champ.audio.chooseVo.length > 0) {
       this.playSample(this.pickRandom(champ.audio.chooseVo), 0.6);
-      return;
-    }
-    if (champ.audio.synthProfile === 'void_beast') {
-      this.playSynthTone('sawtooth', 125, 58, 0.38, 0.14);
-      this.playSynthTone('triangle', 190, 82, 0.34, 0.12);
     }
   }
 
@@ -193,10 +188,6 @@ export class GameAudioEngine {
     const champ = getChampionConfig(championId);
     if (champ.audio.tauntVo && champ.audio.tauntVo.length > 0) {
       this.playSample(this.pickRandom(champ.audio.tauntVo), 0.6);
-      return;
-    }
-    if (champ.audio.synthProfile === 'void_beast') {
-      this.playSynthTone('sawtooth', 145, 52, 0.42, 0.16);
     }
   }
 
@@ -208,12 +199,7 @@ export class GameAudioEngine {
     const champ = getChampionConfig(championId);
     if (champ.audio.qCastSfx && champ.audio.qCastSfx.length > 0) {
       this.playSample(this.pickRandom(champ.audio.qCastSfx), champ.audio.qCastSfxVolume ?? 1.0);
-    } else if (champ.audio.synthProfile === 'void_beast') {
-      // Deep Void stomp impact
-      this.playSynthTone('sawtooth', 165, 42, 0.22, 0.18);
-      this.playSynthTone('sine', 95, 36, 0.25, 0.2);
     }
-
     if (champ.audio.qCastVo && champ.audio.qCastVo.length > 0) {
       const chance = champ.audio.qCastVoChance ?? 0.45;
       if (Math.random() < chance) {
@@ -226,11 +212,6 @@ export class GameAudioEngine {
     const champ = getChampionConfig(championId);
     if (champ.audio.qHitSfx && champ.audio.qHitSfx.length > 0) {
       this.playSample(this.pickRandom(champ.audio.qHitSfx), champ.audio.qHitSfxVolume ?? 1.2);
-      return;
-    }
-    if (champ.audio.synthProfile === 'void_beast') {
-      this.playSynthTone('square', 280, 75, 0.16, 0.15);
-      this.playSynthTone('sawtooth', 150, 48, 0.24, 0.18);
     }
   }
 
@@ -246,23 +227,14 @@ export class GameAudioEngine {
   public playZoneSpawn(championId?: ChampionId): void {
     const champ = getChampionConfig(championId);
     if (champ.audio.zoneSpawnSfx && champ.audio.zoneSpawnSfx.length > 0) {
-      this.playSample(this.pickRandom(champ.audio.zoneSpawnSfx), 0.85);
-      return;
-    }
-    if (champ.audio.synthProfile === 'void_beast') {
-      this.playSynthTone('sine', 78, 128, 0.45, 0.16);
+      this.playSample(this.pickRandom(champ.audio.zoneSpawnSfx), 0.9);
     }
   }
 
   public playZoneErupt(championId?: ChampionId): void {
     const champ = getChampionConfig(championId);
     if (champ.audio.zoneEruptSfx && champ.audio.zoneEruptSfx.length > 0) {
-      this.playSample(this.pickRandom(champ.audio.zoneEruptSfx), 1.0);
-      return;
-    }
-    if (champ.audio.synthProfile === 'void_beast') {
-      this.playSynthTone('sawtooth', 240, 46, 0.26, 0.22);
-      this.playSynthTone('triangle', 380, 90, 0.18, 0.16);
+      this.playSample(this.pickRandom(champ.audio.zoneEruptSfx), 1.05);
     }
   }
 

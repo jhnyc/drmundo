@@ -135,7 +135,6 @@ export const DR_MUNDO_CONFIG: ChampionConfig = {
     qCastVo: ['/assets/audio/mundo_q_vo_0.ogg', '/assets/audio/mundo_q_vo_1.ogg'],
     qCastVoChance: 0.45,
     qHitSfx: ['/assets/audio/mundo_q_hit_sfx.ogg?v=2'],
-    qHitSfxVolume: 1.45,
-    synthProfile: 'mundo'
+    qHitSfxVolume: 1.45
   }
 };

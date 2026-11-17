@@ -47,7 +47,7 @@ function nextMatching(
   });
 }
 
-test('live server WS flow supports champion selection, ChoGath Rupture, and Mundo cleaver 1v1', async () => {
+test('live server WS enforces same-champ vs same-champ mirror and executes ChoGath Rupture 1v1', async () => {
   const serverEntry = path.resolve(process.cwd(), 'dist', 'server.js');
   assert.ok(fs.existsSync(serverEntry), 'dist/server.js must be built before running E2E test');
 
@@ -92,11 +92,11 @@ test('live server WS flow supports champion selection, ChoGath Rupture, and Mund
       connectClient(`ws://127.0.0.1:${PORT}`, msgs1)
     ]);
 
-    // Player 0 creates room as Cho'Gath
+    // Host creates room as Cho'Gath (mirror 1v1)
     ws0.send(
       JSON.stringify({
         type: 'create_room',
-        name: 'VoidPlayer',
+        name: 'VoidHost',
         championId: 'chogath',
         spells: ['flash', 'ghost'],
         withBot: false
@@ -106,15 +106,15 @@ test('live server WS flow supports champion selection, ChoGath Rupture, and Mund
     const joined0 = await nextMatching(msgs0, (m) => m.type === 'joined_room', ws0);
     assert.equal(joined0.type, 'joined_room');
     if (joined0.type !== 'joined_room') return;
+    assert.equal(joined0.lobby.championId, 'chogath');
     assert.equal(joined0.lobby.players[0]?.championId, 'chogath');
 
-    // Player 1 joins as Dr. Mundo
+    // Player 1 joins and automatically inherits room's champion (Cho'Gath)
     ws1.send(
       JSON.stringify({
         type: 'join_room',
         roomId: joined0.roomId,
-        name: 'CleaverPlayer',
-        championId: 'drmundo',
+        name: 'VoidChallenger',
         spells: ['flash', 'heal']
       })
     );
@@ -122,10 +122,35 @@ test('live server WS flow supports champion selection, ChoGath Rupture, and Mund
     const joined1 = await nextMatching(msgs1, (m) => m.type === 'joined_room', ws1);
     assert.equal(joined1.type, 'joined_room');
     if (joined1.type !== 'joined_room') return;
+    assert.equal(joined1.lobby.championId, 'chogath');
     assert.equal(joined1.lobby.players[0]?.championId, 'chogath');
-    assert.equal(joined1.lobby.players[1]?.championId, 'drmundo');
+    assert.equal(joined1.lobby.players[1]?.championId, 'chogath');
 
-    // Start match and wait for countdown (3s) -> playing
+    // Non-host trying select_champion cannot override room champion
+    msgs0.length = 0;
+    ws1.send(JSON.stringify({ type: 'select_champion', championId: 'drmundo' }));
+    // Host toggles to drmundo then back to chogath -> both slots mirror
+    ws0.send(JSON.stringify({ type: 'select_champion', championId: 'drmundo' }));
+    const switchedToMundo = await nextMatching(
+      msgs0,
+      (m) => m.type === 'room_update' && m.championId === 'drmundo',
+      ws0
+    );
+    assert.equal(switchedToMundo.type, 'room_update');
+    if (switchedToMundo.type === 'room_update') {
+      assert.equal(switchedToMundo.players[0]?.championId, 'drmundo');
+      assert.equal(switchedToMundo.players[1]?.championId, 'drmundo');
+    }
+
+    msgs0.length = 0;
+    ws0.send(JSON.stringify({ type: 'select_champion', championId: 'chogath' }));
+    await nextMatching(
+      msgs0,
+      (m) => m.type === 'room_update' && m.championId === 'chogath',
+      ws0
+    );
+
+    // Start Cho'Gath mirror match and wait for countdown -> playing
     msgs0.length = 0;
     ws0.send(JSON.stringify({ type: 'start_match' }));
 
@@ -136,20 +161,10 @@ test('live server WS flow supports champion selection, ChoGath Rupture, and Mund
       5000
     );
 
-    // Cho'Gath casts Q toward Red side spawn (300, 300), Mundo casts Q toward Blue side (-300, -300)
+    // Both Cho'Gaths cast Q Rupture
     msgs0.length = 0;
     ws0.send(JSON.stringify({ type: 'cast_q', x: 300, z: 300 }));
     ws1.send(JSON.stringify({ type: 'cast_q', x: -300, z: -300 }));
-
-    const launchEv = await nextMatching(
-      msgs0,
-      (m) =>
-        m.type === 'state_snapshot' &&
-        m.events.some((e) => e.type === 'q_launch' && e.championId === 'drmundo'),
-      ws0,
-      2000
-    );
-    assert.equal(launchEv.type, 'state_snapshot');
 
     const zoneSpawnEv = await nextMatching(
       msgs0,

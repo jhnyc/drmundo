@@ -16,21 +16,17 @@ export interface CastMeshHideConfig {
   lockAnimUntilRemaining: number;
 }
 
-export type ChampionModelConfig =
-  | {
-      kind: 'glb';
-      url: string;
-      scale: number;
-      pelvisBones: string[];
-      pelvisRootMotionFactor: number;
-      clips: Record<AnimKey, ChampionClipConfig>;
-      castMeshHide?: CastMeshHideConfig;
-    }
-  | {
-      kind: 'procedural';
-      preset: 'chogath_void_beast';
-      scale: number;
-    };
+export interface ChampionModelConfig {
+  kind: 'glb';
+  url: string;
+  scale: number;
+  pelvisBones: string[];
+  pelvisRootMotionFactor: number;
+  clips: Record<AnimKey, ChampionClipConfig>;
+  /** How long q_cast animation locks before transitioning back to idle/run. */
+  castAnimDuration?: number;
+  castMeshHide?: CastMeshHideConfig;
+}
 
 export type ProjectileVisualConfig =
   | {
@@ -51,6 +47,22 @@ export type ProjectileVisualConfig =
       coreColorHex: number;
       glowColorHex: number;
     };
+
+export interface GroundZoneVisualConfig {
+  kind: 'void_rupture';
+  telegraphColorHex: number;
+  eruptColorHex: number;
+  spikeColorHex: number;
+  meshUrl?: string;
+  meshTextureUrl?: string;
+  /** Unscaled horizontal radius of meshUrl in raw OBJ units (used to scale to zone.radius). */
+  meshBaseRadius?: number;
+  crackTextureUrl?: string;
+  indicatorTextureUrl?: string;
+  smokeTextureUrl?: string;
+  auraTextureUrl?: string;
+  rockTextureUrl?: string;
+}
 
 export interface QAbilityDamageConfig {
   flatMin: number;
@@ -112,12 +124,7 @@ export type DelayedGroundAoeQConfig = {
     range: number;
     colorHex: number;
   };
-  zoneVisual: {
-    kind: 'void_rupture';
-    telegraphColorHex: number;
-    eruptColorHex: number;
-    spikeColorHex: number;
-  };
+  zoneVisual: GroundZoneVisualConfig;
   vfx: {
     hitColorHex: number;
     missColorHex: number;
@@ -138,7 +145,6 @@ export interface ChampionAudioConfig {
   qMissSfx?: readonly string[];
   zoneSpawnSfx?: readonly string[];
   zoneEruptSfx?: readonly string[];
-  synthProfile?: 'mundo' | 'void_beast';
 }
 
 export interface ChampionConfig {

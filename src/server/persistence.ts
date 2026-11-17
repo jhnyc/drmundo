@@ -93,12 +93,19 @@ export class RoomPersistence {
       for (const saved of parsed.rooms) {
         if (!saved || !saved.id) continue;
         if (now - (parsed.savedAt || 0) > RESTORED_ROOM_TTL_MS) continue;
+        const roomChampionId = normalizeChampionId(
+          saved.championId ?? saved.players?.[0]?.championId
+        );
         const players: [ServerPlayerState | null, ServerPlayerState | null] = [
           hydratePlayer(saved.players?.[0] || null),
           hydratePlayer(saved.players?.[1] || null)
         ];
+        for (const p of players) {
+          if (p) p.championId = roomChampionId;
+        }
         rooms.set(saved.id, {
           ...saved,
+          championId: roomChampionId,
           nextZoneId: saved.nextZoneId ?? 1,
           clients: [],
           events: [],

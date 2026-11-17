@@ -621,53 +621,13 @@ button, input, select, .clickable {
   text-overflow: ellipsis;
 }
 
-.bot-champion-controls {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  background: rgba(1, 10, 19, 0.72);
-  border: 1px solid rgba(200, 170, 110, 0.22);
-  padding: 6px 10px;
+.champion-picker-section.host-locked .champion-option-card {
+  opacity: 0.72;
+  pointer-events: none;
 }
 
-.bot-champion-controls.hidden {
-  display: none;
-}
-
-.bot-champion-label {
-  font-family: 'BeaufortForLoL', serif;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.9px;
-  color: #a09b8c;
-}
-
-.bot-champion-pills {
-  display: flex;
-  gap: 6px;
-}
-
-.bot-champ-pill {
-  font-family: 'BeaufortForLoL', serif;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 4px 8px;
-  background: rgba(9, 20, 40, 0.9);
-  border: 1px solid #463714;
-  color: #a09b8c;
-  transition: all 0.14s ease;
-}
-
-.bot-champ-pill:hover {
-  border-color: var(--hex-gold);
-  color: var(--hex-gold-bright);
-}
-
-.bot-champ-pill.active {
-  border-color: var(--lol-red);
-  background: rgba(232, 64, 87, 0.2);
-  color: #fff;
+.champion-picker-section.host-locked .champion-option-card.selected {
+  opacity: 1;
 }
 
 /* Summoner Spell Selector (Flash, Heal, Ghost) */

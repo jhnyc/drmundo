@@ -9,7 +9,6 @@ export const state = {
     passcode: '',
     mySlot: 0,
     myChampionId: DEFAULT_CHAMPION_ID,
-    botChampionId: DEFAULT_CHAMPION_ID,
     mySpells: ['flash', 'ghost'],
     roomState: 'lobby',
     round: 1,
