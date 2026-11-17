@@ -82,7 +82,7 @@ export async function buildBaronPitEnvironment() {
     const planeSize = 4450;
     const offsetX = -(0.5908 - 0.5) * planeSize;
     const offsetZ = (0.6143 - 0.5) * planeSize;
-    const groundGeo = new THREE.PlaneGeometry(planeSize, planeSize, 160, 160);
+    const groundGeo = new THREE.PlaneGeometry(planeSize, planeSize, 64, 64);
     groundGeo.rotateX(-Math.PI / 2);
     const posAttr = groundGeo.attributes.position;
     for (let i = 0; i < posAttr.count; i++) {

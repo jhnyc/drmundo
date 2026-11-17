@@ -3,6 +3,8 @@ import type { AnimKey } from '../shared/types.js';
 import { gltfLoader, objLoader, scene, textureLoader } from './scene.js';
 import { LOL_SCALE } from './state.js';
 
+const _pelvisWorld = new THREE.Vector3();
+
 export interface RigDisplayTarget {
   x: number;
   z: number;
@@ -30,6 +32,9 @@ export class MundoChampionRig {
   private flashTintTimer = 0;
   private healTintTimer = 0;
   private ghostTrailEmitTimer = 0;
+  private lastEmissiveHex = -1;
+  private lastEmissiveInt = -1;
+  private lastBodyOpacity = -1;
 
   constructor(slot: number) {
     this.slot = slot;
@@ -217,11 +222,10 @@ export class MundoChampionRig {
 
     if (this.model && this.pelvisNode) {
       this.root.updateMatrixWorld(true);
-      const pelvisWorld = new THREE.Vector3();
-      this.pelvisNode.getWorldPosition(pelvisWorld);
-      const rootLocal = this.root.worldToLocal(pelvisWorld.clone());
-      this.model.position.x -= rootLocal.x * 0.85;
-      this.model.position.z -= rootLocal.z * 0.85;
+      this.pelvisNode.getWorldPosition(_pelvisWorld);
+      this.root.worldToLocal(_pelvisWorld);
+      this.model.position.x -= _pelvisWorld.x * 0.85;
+      this.model.position.z -= _pelvisWorld.z * 0.85;
     }
 
     if (this.currentAnimKey === 'q_cast' && this.weaponHideTimer > 0.1) {
@@ -249,16 +253,26 @@ export class MundoChampionRig {
       emissiveInt = 0.32;
     }
 
-    for (const mat of this.bodyMaterials) {
-      if (mat.emissive) {
-        mat.emissive.setHex(emissiveHex);
-        mat.emissiveIntensity = emissiveInt;
-      }
-      if (bodyOpacity < 0.99) {
-        mat.transparent = true;
-        mat.opacity = bodyOpacity;
-      } else {
-        mat.opacity = 1.0;
+    if (
+      emissiveHex !== this.lastEmissiveHex ||
+      Math.abs(emissiveInt - this.lastEmissiveInt) > 0.005 ||
+      bodyOpacity !== this.lastBodyOpacity
+    ) {
+      this.lastEmissiveHex = emissiveHex;
+      this.lastEmissiveInt = emissiveInt;
+      this.lastBodyOpacity = bodyOpacity;
+      for (const mat of this.bodyMaterials) {
+        if (mat.emissive) {
+          mat.emissive.setHex(emissiveHex);
+          mat.emissiveIntensity = emissiveInt;
+        }
+        if (bodyOpacity < 0.99) {
+          mat.transparent = true;
+          mat.opacity = bodyOpacity;
+        } else {
+          mat.transparent = false;
+          mat.opacity = 1.0;
+        }
       }
     }
 

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { gltfLoader, objLoader, scene, textureLoader } from './scene.js';
 import { LOL_SCALE } from './state.js';
+const _pelvisWorld = new THREE.Vector3();
 export class MundoChampionRig {
     slot;
     root;
@@ -17,6 +18,9 @@ export class MundoChampionRig {
     flashTintTimer = 0;
     healTintTimer = 0;
     ghostTrailEmitTimer = 0;
+    lastEmissiveHex = -1;
+    lastEmissiveInt = -1;
+    lastBodyOpacity = -1;
     constructor(slot) {
         this.slot = slot;
         this.root = new THREE.Group();
@@ -185,11 +189,10 @@ export class MundoChampionRig {
         this.root.rotation.y += diffAngle * Math.min(1, dt * 18);
         if (this.model && this.pelvisNode) {
             this.root.updateMatrixWorld(true);
-            const pelvisWorld = new THREE.Vector3();
-            this.pelvisNode.getWorldPosition(pelvisWorld);
-            const rootLocal = this.root.worldToLocal(pelvisWorld.clone());
-            this.model.position.x -= rootLocal.x * 0.85;
-            this.model.position.z -= rootLocal.z * 0.85;
+            this.pelvisNode.getWorldPosition(_pelvisWorld);
+            this.root.worldToLocal(_pelvisWorld);
+            this.model.position.x -= _pelvisWorld.x * 0.85;
+            this.model.position.z -= _pelvisWorld.z * 0.85;
         }
         if (this.currentAnimKey === 'q_cast' && this.weaponHideTimer > 0.1) {
             // Let q_cast throw animation play through its release
@@ -217,17 +220,25 @@ export class MundoChampionRig {
             emissiveHex = 0x5c2d91;
             emissiveInt = 0.32;
         }
-        for (const mat of this.bodyMaterials) {
-            if (mat.emissive) {
-                mat.emissive.setHex(emissiveHex);
-                mat.emissiveIntensity = emissiveInt;
-            }
-            if (bodyOpacity < 0.99) {
-                mat.transparent = true;
-                mat.opacity = bodyOpacity;
-            }
-            else {
-                mat.opacity = 1.0;
+        if (emissiveHex !== this.lastEmissiveHex ||
+            Math.abs(emissiveInt - this.lastEmissiveInt) > 0.005 ||
+            bodyOpacity !== this.lastBodyOpacity) {
+            this.lastEmissiveHex = emissiveHex;
+            this.lastEmissiveInt = emissiveInt;
+            this.lastBodyOpacity = bodyOpacity;
+            for (const mat of this.bodyMaterials) {
+                if (mat.emissive) {
+                    mat.emissive.setHex(emissiveHex);
+                    mat.emissiveIntensity = emissiveInt;
+                }
+                if (bodyOpacity < 0.99) {
+                    mat.transparent = true;
+                    mat.opacity = bodyOpacity;
+                }
+                else {
+                    mat.transparent = false;
+                    mat.opacity = 1.0;
+                }
             }
         }
         if (serverPlayer.ghostTimer > 0) {
