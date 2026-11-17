@@ -1,3 +1,4 @@
+import { CHAMPION_LIST, getChampionConfig } from '../shared/champions/index.js';
 import type {
   ClientToServerMessage,
   GameEvent,
@@ -6,8 +7,9 @@ import type {
   SummonerSpellId
 } from '../shared/types.js';
 import { audio } from './audio.js';
-import { mundoRigs } from './champion.js';
+import { championRigs } from './champion.js';
 import {
+  renderChampionPickerUI,
   showAnnouncerBanner,
   showToast,
   spawnFloatingCombatText,
@@ -19,7 +21,8 @@ import {
   spawnFlashVfx,
   spawnGhostVfx,
   spawnHealVfx,
-  spawnRingBurstVfx
+  spawnRingBurstVfx,
+  spawnZoneEruptionVfx
 } from './vfx.js';
 
 export function getShareableRoomUrl(includePasscode = true): string {
@@ -82,11 +85,13 @@ export function connectWebSocket(): void {
       if (passParam) {
         getEl<HTMLInputElement>('input-join-passcode').value = passParam;
       }
+      const defaultName = getChampionConfig(state.myChampionId).defaultPlayerName;
       sendWs({
         type: 'join_room',
         roomId: roomParam.toUpperCase(),
         passcode: passParam,
-        name: getEl<HTMLInputElement>('input-player-name').value || 'Mundo Challenger',
+        name: getEl<HTMLInputElement>('input-player-name').value || defaultName,
+        championId: state.myChampionId,
         spells: state.mySpells
       });
     }
@@ -122,6 +127,36 @@ function renderEquippedPairHtml(
     .join('');
 }
 
+function renderBotChampionControls(activeChampionId: string): void {
+  const el = getEl('bot-champion-controls');
+  if (state.mySlot !== 0) {
+    el.classList.add('hidden');
+    return;
+  }
+  el.classList.remove('hidden');
+  el.innerHTML = `
+    <span class="bot-champion-label">Bot Champion</span>
+    <div class="bot-champion-pills">
+      ${CHAMPION_LIST.map(
+        (c) => `
+        <button type="button" class="bot-champ-pill clickable${c.id === activeChampionId ? ' active' : ''}" data-bot-champion="${c.id}">
+          ${c.name}
+        </button>
+      `
+      ).join('')}
+    </div>
+  `;
+
+  el.querySelectorAll<HTMLElement>('[data-bot-champion]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const cid = btn.getAttribute('data-bot-champion');
+      if (cid) {
+        sendWs({ type: 'select_bot_champion', championId: cid });
+      }
+    });
+  });
+}
+
 function updateLobbyDOM(lobby: RoomLobbyPayload): void {
   state.roomState = lobby.state;
   state.bestOf = lobby.settings?.bestOf || 3;
@@ -133,38 +168,61 @@ function updateLobbyDOM(lobby: RoomLobbyPayload): void {
 
   const p0 = lobby.players?.[0];
   const p1 = lobby.players?.[1];
+  const myLobbyPlayer = lobby.players?.[state.mySlot];
+  if (myLobbyPlayer) {
+    state.myChampionId = myLobbyPlayer.championId;
+    renderChampionPickerUI('lobby-champion-picker', 'lobby-champion-summary', myLobbyPlayer.championId);
+    renderChampionPickerUI('home-champion-picker', 'home-champion-summary', myLobbyPlayer.championId);
+  }
 
+  const c0 = getChampionConfig(p0?.championId);
+  getEl<HTMLImageElement>('slot-0-portrait-img').src = c0.hud.icons.square;
   getEl('slot-0-name').textContent = p0
     ? `${p0.name}${state.mySlot === 0 ? ' (You)' : ''}`
     : 'Waiting...';
+  getEl('slot-0-champ-sub').textContent = p0 ? `${c0.name} — ${c0.title}` : c0.name;
   getEl('slot-0-spells').innerHTML = renderEquippedPairHtml(p0?.spells || ['flash', 'ghost']);
+  if (p0) {
+    void championRigs[0].load(p0.championId);
+  }
 
   const btnBot = getEl<HTMLButtonElement>('btn-toggle-bot');
+  const botControls = getEl('bot-champion-controls');
   if (p1) {
+    const c1 = getChampionConfig(p1.championId);
+    if (p1.isBot) state.botChampionId = p1.championId;
+    getEl<HTMLImageElement>('slot-1-portrait-img').src = c1.hud.icons.square;
     getEl('slot-1-name').textContent = `${p1.name}${state.mySlot === 1 ? ' (You)' : ''}`;
     getEl('slot-1-sub').textContent = p1.isBot
-      ? 'AI Challenger Bot • Ready for 1v1'
-      : 'Dr. Mundo — The Madman of Zaun';
+      ? `AI Challenger (${c1.name}) • Ready for 1v1`
+      : `${c1.name} — ${c1.title}`;
     getEl('slot-1-spells').innerHTML = renderEquippedPairHtml(p1.spells || ['flash', 'ghost']);
+    void championRigs[1].load(p1.championId);
+
     if (p1.isBot && state.mySlot === 0) {
       btnBot.style.display = 'inline-block';
       btnBot.textContent = 'Remove AI Bot';
+      renderBotChampionControls(p1.championId);
     } else {
       btnBot.style.display = 'none';
+      botControls.classList.add('hidden');
     }
   } else {
+    const defaultChamp = getChampionConfig(state.botChampionId);
+    getEl<HTMLImageElement>('slot-1-portrait-img').src = defaultChamp.hud.icons.square;
     getEl('slot-1-name').textContent = 'Waiting for Opponent...';
     getEl('slot-1-sub').textContent = 'Share room link above or click + Add AI Bot';
     getEl('slot-1-spells').innerHTML = renderEquippedPairHtml(['flash', 'ghost']);
     btnBot.style.display = state.mySlot === 0 ? 'inline-block' : 'none';
     btnBot.textContent = '+ Add AI Bot';
+    botControls.classList.add('hidden');
   }
 
   const startBtn = getEl<HTMLButtonElement>('btn-start-match');
   const statusHint = getEl('lobby-status-hint');
   if (p0 && p1) {
     startBtn.disabled = false;
-    statusHint.textContent = 'Both Mundos ready in the Baron Pit!';
+    statusHint.textContent = 'Both challengers ready in the Baron Pit!';
   } else {
     startBtn.disabled = false;
     statusHint.textContent = 'Waiting for Player 2 (or click + Add AI Bot to start now)';
@@ -195,23 +253,39 @@ function handleGameEvents(events: GameEvent[] = []): void {
       showAnnouncerBanner(`ROUND ${ev.round}`, 'GET READY IN BARON PIT', 2200);
       audio.playCountdownTick(false);
     } else if (ev.type === 'fight_start') {
-      showAnnouncerBanner('FIGHT!', 'DODGE & THROW INFECTED BONESAWS', 1400);
+      const myChamp = getChampionConfig(state.serverPlayers[state.mySlot]?.championId || state.myChampionId);
+      showAnnouncerBanner('FIGHT!', myChamp.fightBannerSub, 1400);
       audio.playCountdownTick(true);
     } else if (ev.type === 'q_windup') {
-      const rig = mundoRigs[ev.slot];
-      if (rig) rig.triggerQThrowVisual();
-      audio.playCleaverThrow();
+      const rig = championRigs[ev.slot];
+      if (rig) rig.triggerCastVisual();
+      audio.playAbilityCast(ev.championId);
+    } else if (ev.type === 'zone_spawn') {
+      audio.playZoneSpawn(ev.championId);
+    } else if (ev.type === 'zone_erupt') {
+      audio.playZoneErupt(ev.championId);
+      spawnZoneEruptionVfx(ev.championId, ev.x, ev.z, ev.radius);
     } else if (ev.type === 'q_hit') {
-      audio.playCleaverHit();
-      spawnRingBurstVfx(ev.x, ev.z, 0xd67eff, 25, 115, 0.35);
+      const attackerChamp = getChampionConfig(ev.attackerChampionId);
+      audio.playAbilityHit(ev.attackerChampionId);
+      spawnRingBurstVfx(ev.x, ev.z, attackerChamp.q.vfx.hitColorHex, 25, 115, 0.35);
       spawnFloatingCombatText(ev.x, ev.z, `-${ev.damage}`, 'magic-dmg');
-      const attacker = state.serverPlayers[ev.attackerSlot];
-      if (attacker) {
-        spawnFloatingCombatText(attacker.x, attacker.z, `+${ev.refund} HP`, 'heal-text');
+      if (ev.knockupDuration && ev.knockupDuration > 0) {
+        spawnFloatingCombatText(ev.x, ev.z, 'AIRBORNE!', 'cc-text', 235);
+      }
+      if (ev.refund > 0) {
+        const attacker = state.serverPlayers[ev.attackerSlot];
+        if (attacker) {
+          spawnFloatingCombatText(attacker.x, attacker.z, `+${ev.refund} HP`, 'heal-text');
+        }
       }
     } else if (ev.type === 'q_miss') {
-      audio.playCleaverMiss();
-      spawnRingBurstVfx(ev.x, ev.z, 0x95a5a6, 10, 45, 0.22);
+      // Delayed ground zones already play zone_erupt visuals/audio
+      if (ev.projId !== undefined) {
+        const champ = getChampionConfig(ev.attackerChampionId);
+        audio.playAbilityMiss(ev.attackerChampionId);
+        spawnRingBurstVfx(ev.x, ev.z, champ.q.vfx.missColorHex, 10, 45, 0.22);
+      }
     } else if (ev.type === 'spell_flash') {
       audio.playFlash();
       spawnFlashVfx(ev.slot, ev.fromX, ev.fromZ, ev.toX, ev.toZ);
@@ -223,8 +297,10 @@ function handleGameEvents(events: GameEvent[] = []): void {
       audio.playGhost(ev.duration);
       spawnGhostVfx(ev.slot, ev.x, ev.z);
     } else if (ev.type === 'round_kill') {
-      const winnerName = state.serverPlayers[ev.winnerSlot]?.name || 'Dr. Mundo';
-      audio.playTauntVo();
+      const winnerPlayer = state.serverPlayers[ev.winnerSlot];
+      const winnerChamp = getChampionConfig(winnerPlayer?.championId);
+      const winnerName = winnerPlayer?.name || winnerChamp.name;
+      audio.playTauntVo(winnerPlayer?.championId);
       if (ev.matchOver) {
         const iWon = ev.winnerSlot === state.mySlot;
         const modal = getEl('gameover-modal');
@@ -234,16 +310,17 @@ function handleGameEvents(events: GameEvent[] = []): void {
 
         titleEl.textContent = iWon ? 'VICTORY' : 'DEFEAT';
         titleEl.className = iWon ? 'victory' : 'defeat';
-        subEl.textContent = `${winnerName} wins the Baron Pit 1v1 (${ev.scores[0]} - ${ev.scores[1]})!`;
+        subEl.textContent = `${winnerName} wins the Baron Pit 1v1 (${ev.scores[0]} - ${ev.scores[1]}) — ${winnerChamp.victoryLine}`;
 
         const me = state.serverPlayers[state.mySlot];
+        const myChamp = getChampionConfig(me?.championId);
         const thrown = me?.stats?.abilitiesCast || 0;
         const hits = me?.stats?.abilitiesHit || 0;
         const acc = thrown > 0 ? Math.round((hits / thrown) * 100) : 0;
         statsEl.innerHTML = `
           <div><b>Final Series Score:</b> ${ev.scores[0]} – ${ev.scores[1]}</div>
-          <div><b>Your Bonesaw Accuracy:</b> ${acc}% (${hits} Hit / ${thrown} Thrown)</div>
-          <div><b>Total Bonesaw Damage Dealt:</b> ${me?.stats?.damageDealt || 0}</div>
+          <div><b>${myChamp.hud.accuracyLabel}:</b> ${acc}% (${hits} Hit / ${thrown} Cast)</div>
+          <div><b>Total ${myChamp.q.name} Damage Dealt:</b> ${me?.stats?.damageDealt || 0}</div>
         `;
         setTimeout(() => modal.classList.remove('hidden'), 1100);
       } else {
@@ -279,7 +356,8 @@ export function handleServerMessage(msg: ServerToClientMessage): void {
     state.roomId = msg.roomId;
     state.mySlot = msg.slot;
     state.passcode = msg.passcode || '';
-    audio.playChooseVo();
+    const joinedChampId = msg.lobby.players[msg.slot]?.championId || state.myChampionId;
+    audio.playChooseVo(joinedChampId);
 
     const newUrl = new URL(window.location.href);
     newUrl.searchParams.set('room', state.roomId);
@@ -310,6 +388,7 @@ export function handleServerMessage(msg: ServerToClientMessage): void {
     state.round = msg.round;
     state.serverPlayers = msg.players;
     state.serverProjectiles = msg.projectiles || [];
+    state.serverGroundZones = msg.groundZones || [];
 
     if (msg.state === 'countdown') {
       const sec = Math.ceil(msg.countdownTimer);

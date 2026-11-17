@@ -1,13 +1,33 @@
+import { CHAMPION_LIST, getChampionConfig } from '../shared/champions/index.js';
 import { audio } from './audio.js';
-import { loadCleaverProjectileTemplate, mundoRigs } from './champion.js';
-import { bindSpellPickerEvents, getDropdownValue, initHexDropdowns, showToast, updateFloatingHealthBars, updatePerformanceHud } from './hud.js';
+import { championRigs, loadProjectileTemplate } from './champion.js';
+import { bindSpellPickerEvents, getDropdownValue, initChampionPicker, initHexDropdowns, showToast, updateFloatingHealthBars, updatePerformanceHud } from './hud.js';
 import { connectWebSocket, getShareableRoomUrl, sendWs } from './network.js';
 import { buildBaronPitEnvironment, camera, groundRayPlane, loadVfxTextures, raycaster, renderer, scene, updateCameraTransform, voidParticles, wardMixers } from './scene.js';
 import { getEl, state } from './state.js';
-import { spawnGhostTrailStep, spawnMoveClickIndicator, syncProjectiles, updateSkillshotIndicator, updateTransientVfx } from './vfx.js';
+import { spawnGhostTrailStep, spawnMoveClickIndicator, syncGroundZones, syncProjectiles, updateSkillshotIndicator, updateTransientVfx } from './vfx.js';
 // ============================================================================
 // UI INITIALIZATION & LOBBY BUTTON BINDINGS
 // ============================================================================
+const onChampionSelected = (championId) => {
+    const nameInput = getEl('input-player-name');
+    const currentName = nameInput.value.trim();
+    const isDefaultName = !currentName || CHAMPION_LIST.some((c) => c.defaultPlayerName === currentName || c.name === currentName);
+    const nextChamp = getChampionConfig(championId);
+    if (isDefaultName) {
+        nameInput.value = nextChamp.defaultPlayerName;
+    }
+    audio.playChooseVo(championId);
+    void championRigs[state.mySlot].load(championId);
+    if (state.roomId) {
+        sendWs({ type: 'select_champion', championId });
+        if (isDefaultName) {
+            sendWs({ type: 'update_name', name: nextChamp.defaultPlayerName });
+        }
+    }
+};
+initChampionPicker('home-champion-picker', 'home-champion-summary', onChampionSelected);
+initChampionPicker('lobby-champion-picker', 'lobby-champion-summary', onChampionSelected);
 const onSpellsChanged = (spells) => {
     if (state.roomId) {
         sendWs({ type: 'select_spells', spells });
@@ -18,9 +38,12 @@ bindSpellPickerEvents('lobby-spell-picker', onSpellsChanged);
 initHexDropdowns();
 getEl('btn-create-room').addEventListener('click', () => {
     audio.ensureContext();
+    const defaultName = getChampionConfig(state.myChampionId).defaultPlayerName;
     sendWs({
         type: 'create_room',
-        name: getEl('input-player-name').value.trim() || 'Dr. Mundo',
+        name: getEl('input-player-name').value.trim() || defaultName,
+        championId: state.myChampionId,
+        botChampionId: state.botChampionId,
         passcode: getEl('input-create-passcode').value.trim(),
         bestOf: Number(getDropdownValue('dropdown-best-of') || 3),
         cooldownMode: (getDropdownValue('dropdown-cd-mode') || 'fast'),
@@ -30,9 +53,12 @@ getEl('btn-create-room').addEventListener('click', () => {
 });
 getEl('btn-practice-bot').addEventListener('click', () => {
     audio.ensureContext();
+    const defaultName = getChampionConfig(state.myChampionId).defaultPlayerName;
     sendWs({
         type: 'create_room',
-        name: getEl('input-player-name').value.trim() || 'Dr. Mundo',
+        name: getEl('input-player-name').value.trim() || defaultName,
+        championId: state.myChampionId,
+        botChampionId: state.botChampionId,
         passcode: getEl('input-create-passcode').value.trim(),
         bestOf: Number(getDropdownValue('dropdown-best-of') || 3),
         cooldownMode: (getDropdownValue('dropdown-cd-mode') || 'fast'),
@@ -50,11 +76,13 @@ getEl('btn-join-room').addEventListener('click', () => {
         showToast('Please enter a Room Code');
         return;
     }
+    const defaultName = getChampionConfig(state.myChampionId).defaultPlayerName;
     sendWs({
         type: 'join_room',
         roomId: code,
         passcode: getEl('input-join-passcode').value.trim(),
-        name: getEl('input-player-name').value.trim() || 'Dr. Mundo',
+        name: getEl('input-player-name').value.trim() || defaultName,
+        championId: state.myChampionId,
         spells: state.mySpells
     });
 });
@@ -73,7 +101,7 @@ getEl('btn-copy-share-link').addEventListener('click', async () => {
 });
 getEl('btn-copy-code-pass').addEventListener('click', async () => {
     const linkNoPass = getShareableRoomUrl(false);
-    const text = `Baron Pit Dr. Mundo 1v1 — Room Code: ${state.roomId}${state.passcode ? ` | Passcode: ${state.passcode}` : ''} | Link: ${linkNoPass}`;
+    const text = `Baron Pit 1v1 — Room Code: ${state.roomId}${state.passcode ? ` | Passcode: ${state.passcode}` : ''} | Link: ${linkNoPass}`;
     await navigator.clipboard.writeText(text).catch(() => { });
     showToast('Copied Room Code & Passcode details!');
 });
@@ -205,7 +233,7 @@ window.addEventListener('keydown', (e) => {
     }
     else if (key === '2') {
         sendWs({ type: 'emote', emote: 'taunt' });
-        audio.playTauntVo();
+        audio.playTauntVo(state.serverPlayers[state.mySlot]?.championId || state.myChampionId);
     }
     else if (key === '3') {
         sendWs({ type: 'emote', emote: 'dance' });
@@ -236,12 +264,13 @@ window.addEventListener('resize', () => {
 // ============================================================================
 async function initAllAssets() {
     try {
+        const projectileLoads = CHAMPION_LIST.filter((c) => c.q.archetype === 'linear_projectile' && c.q.projectileVisual.kind === 'obj_model').map((c) => loadProjectileTemplate(c.q.archetype === 'linear_projectile' ? c.q.projectileVisual : { kind: 'energy_orb', radius: 50, coreColorHex: 0xffffff, glowColorHex: 0xffffff }));
         await Promise.all([
             loadVfxTextures(),
             buildBaronPitEnvironment(),
-            loadCleaverProjectileTemplate(),
-            mundoRigs[0].load(),
-            mundoRigs[1].load()
+            ...projectileLoads,
+            championRigs[0].load(state.myChampionId),
+            championRigs[1].load(state.botChampionId)
         ]);
         state.assetsLoaded = true;
     }
@@ -283,7 +312,8 @@ function animate(now) {
         voidParticles.rotation.y += dt * 0.04;
     }
     if (state.roomState === 'lobby' && !state.serverPlayers[0] && !state.serverPlayers[1]) {
-        mundoRigs[0].update(dt, {
+        championRigs[0].update(dt, {
+            championId: state.myChampionId,
             x: -300,
             z: -300,
             angle: Math.PI * 0.25,
@@ -292,7 +322,8 @@ function animate(now) {
             healSpeedTimer: 0,
             slowTimer: 0
         }, spawnGhostTrailStep);
-        mundoRigs[1].update(dt, {
+        championRigs[1].update(dt, {
+            championId: state.botChampionId,
             x: 300,
             z: 300,
             angle: -Math.PI * 0.75,
@@ -303,10 +334,11 @@ function animate(now) {
         }, spawnGhostTrailStep);
     }
     else {
-        mundoRigs[0].update(dt, state.serverPlayers[0], spawnGhostTrailStep);
-        mundoRigs[1].update(dt, state.serverPlayers[1], spawnGhostTrailStep);
+        championRigs[0].update(dt, state.serverPlayers[0], spawnGhostTrailStep);
+        championRigs[1].update(dt, state.serverPlayers[1], spawnGhostTrailStep);
     }
     syncProjectiles(dt);
+    syncGroundZones(dt);
     updateTransientVfx(dt);
     updateSkillshotIndicator();
     updateCameraTransform(dt);

@@ -1,15 +1,16 @@
 // ============================================================================
-// AUTHENTIC LEAGUE OF LEGENDS DR. MUNDO & SUMMONER SPELL AUDIO ENGINE
-// Uses official Riot Games / League of Legends .ogg sound effects
+// DATA-DRIVEN CHAMPION & SUMMONER SPELL AUDIO ENGINE
+// Plays official Riot .ogg files when configured, with WebAudio synth fallback
 // ============================================================================
+
+import { CHAMPION_LIST, getChampionConfig } from '../shared/champions/index.js';
+import type { ChampionId } from '../shared/types.js';
 
 interface WindowWithWebkitAudio extends Window {
   webkitAudioContext?: typeof AudioContext;
 }
 
-const SOUND_PATHS = {
-  chooseVo: ['/assets/audio/drmundo_choose_vo.ogg'],
-  banVo: ['/assets/audio/drmundo_ban_vo.ogg'],
+const SUMMONER_SOUND_PATHS = {
   flash: [
     '/assets/audio/flash_sfx_1.ogg',
     '/assets/audio/flash_sfx_2.ogg',
@@ -23,17 +24,10 @@ const SOUND_PATHS = {
   ghostStart: ['/assets/audio/ghost_sfx_1.ogg'],
   ghostLoop: ['/assets/audio/ghost_sfx_loop.ogg'],
   ghostEnd: ['/assets/audio/ghost_sfx_end.ogg'],
-  recall: ['/assets/audio/recall_sfx.ogg'],
-  qThrowSfx: ['/assets/audio/mundo_q_throw_sfx.ogg?v=2'],
-  qHitSfx: ['/assets/audio/mundo_q_hit_sfx.ogg?v=2'],
-  qThrowVo: [
-    '/assets/audio/mundo_q_vo_0.ogg',
-    '/assets/audio/mundo_q_vo_1.ogg'
-  ],
-  qHitVo: ['/assets/audio/mundo_q_hit_vo_0.ogg']
+  recall: ['/assets/audio/recall_sfx.ogg']
 } as const;
 
-export class MundoAudioEngine {
+export class GameAudioEngine {
   public ctx: AudioContext | null = null;
   public muted = false;
   private bufferCache = new Map<string, AudioBuffer>();
@@ -41,19 +35,35 @@ export class MundoAudioEngine {
   private activeGhostTimers: ReturnType<typeof setTimeout>[] = [];
 
   constructor() {
-    // Pre-fetch all official League of Legends audio files so they play with zero latency
     this.preloadAll();
   }
 
   private preloadAll(): void {
     const allUrls = new Set<string>();
-    for (const list of Object.values(SOUND_PATHS)) {
+    for (const list of Object.values(SUMMONER_SOUND_PATHS)) {
       for (const url of list) {
         allUrls.add(url);
       }
     }
+    for (const champ of CHAMPION_LIST) {
+      const lists = [
+        champ.audio.chooseVo,
+        champ.audio.tauntVo,
+        champ.audio.qCastSfx,
+        champ.audio.qCastVo,
+        champ.audio.qHitSfx,
+        champ.audio.qMissSfx,
+        champ.audio.zoneSpawnSfx,
+        champ.audio.zoneEruptSfx
+      ];
+      for (const list of lists) {
+        if (!list) continue;
+        for (const url of list) {
+          allUrls.add(url);
+        }
+      }
+    }
     for (const url of allUrls) {
-      // Warm browser HTTP cache immediately
       fetch(url).catch(() => {});
     }
   }
@@ -114,7 +124,6 @@ export class MundoAudioEngine {
         src.start(0);
         return;
       }
-      // Decode asynchronously & play immediately when ready
       void this.getDecodedBuffer(url).then((buf) => {
         if (buf && !this.muted) {
           const src = ctx.createBufferSource();
@@ -145,93 +154,143 @@ export class MundoAudioEngine {
     return arr[Math.floor(Math.random() * arr.length)];
   }
 
-  public playChooseVo(): void {
-    this.playSample(SOUND_PATHS.chooseVo[0], 0.6);
-  }
-
-  public playTauntVo(): void {
-    this.playSample(SOUND_PATHS.banVo[0], 0.6);
-  }
-
-  public playMoveClick(): void {
+  private playSynthTone(
+    type: OscillatorType,
+    startFreq: number,
+    endFreq: number,
+    durationSec: number,
+    peakGain: number
+  ): void {
     if (this.muted) return;
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(520, now);
-    osc.frequency.exponentialRampToValueAtTime(220, now + 0.045);
-    gain.gain.setValueAtTime(0.05, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.045);
+    osc.type = type;
+    osc.frequency.setValueAtTime(startFreq, now);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(20, endFreq), now + durationSec);
+    gain.gain.setValueAtTime(peakGain, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + durationSec);
     osc.connect(gain).connect(ctx.destination);
     osc.start(now);
-    osc.stop(now + 0.05);
+    osc.stop(now + durationSec + 0.02);
   }
 
-  public playCleaverThrow(): void {
-    // Official Riot Games Dr. Mundo Q (Infected Bonesaw) cast SFX
-    this.playSample(SOUND_PATHS.qThrowSfx[0], 1.15);
-    // Play Dr. Mundo Q effort grunt on ~45% of throws, matching League of Legends
-    if (Math.random() < 0.45) {
-      this.playSample(this.pickRandom(SOUND_PATHS.qThrowVo), 0.65);
+  public playChooseVo(championId?: ChampionId): void {
+    const champ = getChampionConfig(championId);
+    if (champ.audio.chooseVo && champ.audio.chooseVo.length > 0) {
+      this.playSample(this.pickRandom(champ.audio.chooseVo), 0.6);
+      return;
+    }
+    if (champ.audio.synthProfile === 'void_beast') {
+      this.playSynthTone('sawtooth', 125, 58, 0.38, 0.14);
+      this.playSynthTone('triangle', 190, 82, 0.34, 0.12);
     }
   }
 
-  public playCleaverHit(): void {
-    // Official Riot Games Dr. Mundo Q (Infected Bonesaw) impact cleave SFX
-    this.playSample(SOUND_PATHS.qHitSfx[0], 1.45);
+  public playTauntVo(championId?: ChampionId): void {
+    const champ = getChampionConfig(championId);
+    if (champ.audio.tauntVo && champ.audio.tauntVo.length > 0) {
+      this.playSample(this.pickRandom(champ.audio.tauntVo), 0.6);
+      return;
+    }
+    if (champ.audio.synthProfile === 'void_beast') {
+      this.playSynthTone('sawtooth', 145, 52, 0.42, 0.16);
+    }
   }
 
-  public playCleaverMiss(): void {
-    if (this.muted) return;
-    const ctx = this.ensureContext();
-    if (!ctx) return;
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(170, now);
-    osc.frequency.exponentialRampToValueAtTime(65, now + 0.08);
-    gain.gain.setValueAtTime(0.09, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.09);
+  public playMoveClick(): void {
+    this.playSynthTone('triangle', 520, 220, 0.045, 0.05);
+  }
+
+  public playAbilityCast(championId?: ChampionId): void {
+    const champ = getChampionConfig(championId);
+    if (champ.audio.qCastSfx && champ.audio.qCastSfx.length > 0) {
+      this.playSample(this.pickRandom(champ.audio.qCastSfx), champ.audio.qCastSfxVolume ?? 1.0);
+    } else if (champ.audio.synthProfile === 'void_beast') {
+      // Deep Void stomp impact
+      this.playSynthTone('sawtooth', 165, 42, 0.22, 0.18);
+      this.playSynthTone('sine', 95, 36, 0.25, 0.2);
+    }
+
+    if (champ.audio.qCastVo && champ.audio.qCastVo.length > 0) {
+      const chance = champ.audio.qCastVoChance ?? 0.45;
+      if (Math.random() < chance) {
+        this.playSample(this.pickRandom(champ.audio.qCastVo), 0.65);
+      }
+    }
+  }
+
+  public playAbilityHit(championId?: ChampionId): void {
+    const champ = getChampionConfig(championId);
+    if (champ.audio.qHitSfx && champ.audio.qHitSfx.length > 0) {
+      this.playSample(this.pickRandom(champ.audio.qHitSfx), champ.audio.qHitSfxVolume ?? 1.2);
+      return;
+    }
+    if (champ.audio.synthProfile === 'void_beast') {
+      this.playSynthTone('square', 280, 75, 0.16, 0.15);
+      this.playSynthTone('sawtooth', 150, 48, 0.24, 0.18);
+    }
+  }
+
+  public playAbilityMiss(championId?: ChampionId): void {
+    const champ = getChampionConfig(championId);
+    if (champ.audio.qMissSfx && champ.audio.qMissSfx.length > 0) {
+      this.playSample(this.pickRandom(champ.audio.qMissSfx), 0.75);
+      return;
+    }
+    this.playSynthTone('triangle', 170, 65, 0.08, 0.09);
+  }
+
+  public playZoneSpawn(championId?: ChampionId): void {
+    const champ = getChampionConfig(championId);
+    if (champ.audio.zoneSpawnSfx && champ.audio.zoneSpawnSfx.length > 0) {
+      this.playSample(this.pickRandom(champ.audio.zoneSpawnSfx), 0.85);
+      return;
+    }
+    if (champ.audio.synthProfile === 'void_beast') {
+      this.playSynthTone('sine', 78, 128, 0.45, 0.16);
+    }
+  }
+
+  public playZoneErupt(championId?: ChampionId): void {
+    const champ = getChampionConfig(championId);
+    if (champ.audio.zoneEruptSfx && champ.audio.zoneEruptSfx.length > 0) {
+      this.playSample(this.pickRandom(champ.audio.zoneEruptSfx), 1.0);
+      return;
+    }
+    if (champ.audio.synthProfile === 'void_beast') {
+      this.playSynthTone('sawtooth', 240, 46, 0.26, 0.22);
+      this.playSynthTone('triangle', 380, 90, 0.18, 0.16);
+    }
   }
 
   public playFlash(): void {
-    // Official League of Legends Summoner Spell Flash SFX
-    const url = this.pickRandom(SOUND_PATHS.flash);
-    this.playSample(url, 0.88);
+    this.playSample(this.pickRandom(SUMMONER_SOUND_PATHS.flash), 0.88);
   }
 
   public playHeal(): void {
-    // Official League of Legends Summoner Spell Heal SFX
-    const url = this.pickRandom(SOUND_PATHS.heal);
-    this.playSample(url, 0.88);
+    this.playSample(this.pickRandom(SUMMONER_SOUND_PATHS.heal), 0.88);
   }
 
   public playGhost(durationSec = 7.0): void {
-    // Official League of Legends Summoner Spell Ghost activation + spectral wind + fadeout SFX
-    this.playSample(SOUND_PATHS.ghostStart[0], 0.88);
+    this.playSample(SUMMONER_SOUND_PATHS.ghostStart[0], 0.88);
 
     const loopTimer = setTimeout(() => {
-      this.playSample(SOUND_PATHS.ghostLoop[0], 0.65);
+      this.playSample(SUMMONER_SOUND_PATHS.ghostLoop[0], 0.65);
     }, 450);
 
     const endDelayMs = Math.max(1500, (durationSec - 1.2) * 1000);
     const endTimer = setTimeout(() => {
-      this.playSample(SOUND_PATHS.ghostEnd[0], 0.75);
+      this.playSample(SUMMONER_SOUND_PATHS.ghostEnd[0], 0.75);
     }, endDelayMs);
 
     this.activeGhostTimers.push(loopTimer, endTimer);
   }
 
   public playRecall(): void {
-    // Official League of Legends Recall channel SFX
-    this.playSample(SOUND_PATHS.recall[0], 0.72);
+    this.playSample(SUMMONER_SOUND_PATHS.recall[0], 0.72);
   }
 
   public playCountdownTick(isFight = false): void {
@@ -254,4 +313,4 @@ export class MundoAudioEngine {
   }
 }
 
-export const audio = new MundoAudioEngine();
+export const audio = new GameAudioEngine();

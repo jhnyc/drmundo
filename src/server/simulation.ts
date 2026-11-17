@@ -401,6 +401,7 @@ export function serializePlayerSnapshot(p: ServerPlayerState | null): PlayerSnap
     maxSpellCd: p.maxSpellCd,
     spells: p.spells,
     slowTimer: Math.round(p.slowTimer * 100) / 100,
+    slowPercent: Math.round(p.slowPercent * 100) / 100,
     knockupTimer: Math.round(p.knockupTimer * 100) / 100,
     knockupDuration: Math.round(p.knockupDuration * 100) / 100,
     ghostTimer: Math.round(p.ghostTimer * 100) / 100,

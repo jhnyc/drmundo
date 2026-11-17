@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Baron Pit Dr. Mundo 1v1 — League of Legends Dodgeball</title>
+  <title>Baron Pit 1v1 — League of Legends Skillshot Arena</title>
   <link rel="icon" type="image/png" href="/assets/icons/drmundo_circle.png" />
   <link rel="stylesheet" href="/styles.css" />
   <script type="importmap">
@@ -69,7 +69,7 @@
     <div class="hextech-shell">
       <div class="hextech-header">
         <div class="brand-group">
-          <img class="brand-avatar" src="/assets/icons/drmundo_circle.png" alt="Dr. Mundo" />
+          <img id="brand-avatar-img" class="brand-avatar" src="/assets/icons/drmundo_circle.png" alt="Champion" />
           <div class="brand-titles">
             <h1>Baron Pit 1v1</h1>
           </div>
@@ -114,6 +114,15 @@
               </div>
             </div>
           </div>
+        </div>
+
+        <!-- Champion Select Strip -->
+        <div class="champion-picker-section">
+          <div class="spell-picker-header">
+            <span>Select Champion</span>
+            <span class="label-hint" id="home-champion-summary">Dr. Mundo — Infected Bonesaw (Q)</span>
+          </div>
+          <div class="champion-picker-row" id="home-champion-picker"></div>
         </div>
 
         <div class="home-grid">
@@ -212,12 +221,12 @@
           <div class="player-slot-card blue-side">
             <div class="slot-top">
               <div class="slot-portrait">
-                <img src="/assets/icons/drmundo_square.png" alt="Blue Dr. Mundo" />
+                <img id="slot-0-portrait-img" src="/assets/icons/drmundo_square.png" alt="Blue Side Champion" />
               </div>
               <div>
                 <div class="slot-team-tag">Blue Side</div>
                 <div class="slot-player-name" id="slot-0-name">Waiting...</div>
-                <div class="slot-champ-sub">Dr. Mundo</div>
+                <div class="slot-champ-sub" id="slot-0-champ-sub">Dr. Mundo</div>
               </div>
             </div>
             <div class="slot-spells-display">
@@ -232,7 +241,7 @@
           <div class="player-slot-card red-side">
             <div class="slot-top">
               <div class="slot-portrait">
-                <img src="/assets/icons/drmundo_square.png" alt="Red Dr. Mundo" />
+                <img id="slot-1-portrait-img" src="/assets/icons/drmundo_square.png" alt="Red Side Champion" />
               </div>
               <div style="flex:1;">
                 <div class="slot-team-tag">Red Side</div>
@@ -241,11 +250,21 @@
               </div>
               <button id="btn-toggle-bot" class="hex-btn sm" type="button">+ AI Bot</button>
             </div>
+            <div id="bot-champion-controls" class="bot-champion-controls hidden"></div>
             <div class="slot-spells-display">
               <span style="font-family:'BeaufortForLoL',serif; font-size:11px; color:#a09b8c; text-transform:uppercase;">Summoner Spells</span>
               <div class="equipped-pair" id="slot-1-spells"></div>
             </div>
           </div>
+        </div>
+
+        <!-- Lobby Champion Picker -->
+        <div class="champion-picker-section" style="margin-bottom: 12px;">
+          <div class="spell-picker-header">
+            <span>Your Champion</span>
+            <span class="label-hint" id="lobby-champion-summary">Dr. Mundo</span>
+          </div>
+          <div class="champion-picker-row" id="lobby-champion-picker"></div>
         </div>
 
         <!-- Lobby Summoner Spell Picker -->
@@ -324,46 +343,46 @@
     <div class="bottom-lol-hud">
       <div class="hud-left-panel">
         <div class="hud-stats-box">
-          <span class="stat ad"><i></i><b>118</b></span>
-          <span class="stat mr"><i></i><b>58</b></span>
-          <span class="stat arm"><i></i><b>76</b></span>
+          <span class="stat ad"><i></i><b id="hud-stat-ad">118</b></span>
+          <span class="stat mr"><i></i><b id="hud-stat-mr">58</b></span>
+          <span class="stat arm"><i></i><b id="hud-stat-arm">76</b></span>
           <span class="stat hit"><i></i><b id="hud-stat-hits">0</b></span>
-          <span class="stat regen"><i></i><b>16</b></span>
+          <span class="stat regen"><i></i><b id="hud-stat-regen">16</b></span>
           <span class="stat ms"><i></i><b id="hud-stat-ms">385</b></span>
         </div>
         <div class="hud-portrait-wrap">
-          <img src="/assets/icons/drmundo_circle.png" alt="Dr. Mundo" />
-          <div class="hud-level-diamond">9</div>
+          <img id="hud-champ-portrait" src="/assets/icons/drmundo_circle.png" alt="Champion" />
+          <div class="hud-level-diamond" id="hud-champ-level">9</div>
         </div>
       </div>
 
       <div class="hud-center-col">
         <div class="hud-abilities-row">
           <!-- Passive -->
-          <div class="ability-slot passive-slot" title="Passive: Goes Where He Pleases (Health Regeneration)">
-            <img src="/assets/icons/drmundo_p.png" alt="Passive" />
+          <div class="ability-slot passive-slot" id="hud-slot-p" title="Passive">
+            <img id="hud-img-p" src="/assets/icons/drmundo_p.png" alt="Passive" />
             <div class="ability-key">P</div>
           </div>
 
-          <!-- Q: Infected Bonesaw -->
-          <div class="ability-slot clickable" id="hud-slot-q" title="Infected Bonesaw (Q): Hurl cleaver toward cursor">
-            <img src="/assets/icons/drmundo_q.png" alt="Infected Bonesaw" />
-            <div class="ability-cost-tag">50 HP</div>
+          <!-- Q: Primary Ability -->
+          <div class="ability-slot clickable" id="hud-slot-q" title="Primary Ability (Q)">
+            <img id="hud-img-q" src="/assets/icons/drmundo_q.png" alt="Q" />
+            <div class="ability-cost-tag" id="hud-q-cost">50 HP</div>
             <div class="cd-overlay hidden" id="hud-cd-q">0.0</div>
             <div class="ability-key">Q</div>
           </div>
 
-          <!-- W / E / R (Disabled in Classic Mundo Dodgeball) -->
-          <div class="ability-slot disabled-dodgeball" title="Heart Zapper (W) — Disabled in Classic Mundo Dodgeball">
-            <img src="/assets/icons/drmundo_w.png" alt="W" />
+          <!-- W / E / R (Disabled in Classic 1v1) -->
+          <div class="ability-slot disabled-dodgeball" id="hud-slot-w" title="Disabled in Baron Pit 1v1">
+            <img id="hud-img-w" src="/assets/icons/drmundo_w.png" alt="W" />
             <div class="ability-key">W</div>
           </div>
-          <div class="ability-slot disabled-dodgeball" title="Blunt Force Trauma (E) — Disabled in Classic Mundo Dodgeball">
-            <img src="/assets/icons/drmundo_e.png" alt="E" />
+          <div class="ability-slot disabled-dodgeball" id="hud-slot-e" title="Disabled in Baron Pit 1v1">
+            <img id="hud-img-e" src="/assets/icons/drmundo_e.png" alt="E" />
             <div class="ability-key">E</div>
           </div>
-          <div class="ability-slot disabled-dodgeball" title="Maximum Dosage (R) — Disabled in Classic Mundo Dodgeball">
-            <img src="/assets/icons/drmundo_r.png" alt="R" />
+          <div class="ability-slot disabled-dodgeball" id="hud-slot-r" title="Disabled in Baron Pit 1v1">
+            <img id="hud-img-r" src="/assets/icons/drmundo_r.png" alt="R" />
             <div class="ability-key">R</div>
           </div>
 
@@ -392,7 +411,7 @@
           </div>
           <div class="hud-bar-row">
             <div class="hud-bar-outer resource">
-              <div class="hud-res-fill"></div>
+              <div class="hud-res-fill" id="hud-res-fill"></div>
             </div>
             <div class="hud-regen-text"></div>
           </div>

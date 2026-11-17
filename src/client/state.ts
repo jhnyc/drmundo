@@ -1,31 +1,23 @@
 import * as THREE from 'three';
+import { DEFAULT_CHAMPION_ID } from '../shared/champions/index.js';
+import {
+  INV_SQRT2,
+  LOL_SCALE,
+  PIT_RADIUS,
+  SPELL_ICONS,
+  SPELL_NAMES
+} from '../shared/constants.js';
 import type {
   BestOfFormat,
+  ChampionId,
+  GroundZoneSnapshot,
   PlayerSnapshot,
   ProjectileSnapshot,
   RoomState,
   SummonerSpellId
 } from '../shared/types.js';
 
-// 1 Three.js World Unit = 1 League of Legends Unit
-export const LOL_SCALE = 1 / 0.0085; // converts Khada 0.0085 scale back to 1:1 LoL units
-export const PIT_RADIUS = 820;
-export const Q_RANGE = 1050;
-export const Q_SPEED = 2000;
-export const Q_RADIUS = 60;
-export const INV_SQRT2 = Math.SQRT1_2;
-
-export const SPELL_ICONS: Record<SummonerSpellId, string> = {
-  flash: '/assets/icons/summoner_flash.png',
-  heal: '/assets/icons/summoner_heal.png',
-  ghost: '/assets/icons/summoner_ghost.png'
-};
-
-export const SPELL_NAMES: Record<SummonerSpellId, string> = {
-  flash: 'Flash',
-  heal: 'Heal',
-  ghost: 'Ghost'
-};
+export { INV_SQRT2, LOL_SCALE, PIT_RADIUS, SPELL_ICONS, SPELL_NAMES };
 
 export interface ClientState {
   ws: WebSocket | null;
@@ -33,6 +25,8 @@ export interface ClientState {
   roomId: string | null;
   passcode: string;
   mySlot: number;
+  myChampionId: ChampionId;
+  botChampionId: ChampionId;
   mySpells: [SummonerSpellId, SummonerSpellId];
   roomState: RoomState;
   round: number;
@@ -46,6 +40,7 @@ export interface ClientState {
   showSkillshotIndicator: boolean;
   serverPlayers: [PlayerSnapshot | null, PlayerSnapshot | null];
   serverProjectiles: ProjectileSnapshot[];
+  serverGroundZones: GroundZoneSnapshot[];
   assetsLoaded: boolean;
   fps: number | null;
   pingMs: number | null;
@@ -57,6 +52,8 @@ export const state: ClientState = {
   roomId: null,
   passcode: '',
   mySlot: 0,
+  myChampionId: DEFAULT_CHAMPION_ID,
+  botChampionId: DEFAULT_CHAMPION_ID,
   mySpells: ['flash', 'ghost'],
   roomState: 'lobby',
   round: 1,
@@ -70,6 +67,7 @@ export const state: ClientState = {
   showSkillshotIndicator: false,
   serverPlayers: [null, null],
   serverProjectiles: [],
+  serverGroundZones: [],
   assetsLoaded: false,
   fps: null,
   pingMs: null

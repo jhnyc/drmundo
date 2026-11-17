@@ -85,6 +85,7 @@ export interface PlayerSnapshot {
   maxSpellCd: [number, number];
   spells: [SummonerSpellId, SummonerSpellId];
   slowTimer: number;
+  slowPercent: number;
   knockupTimer: number;
   knockupDuration: number;
   ghostTimer: number;

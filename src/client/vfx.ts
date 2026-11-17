@@ -1,11 +1,22 @@
 import * as THREE from 'three';
-import { cleaverTemplateMesh, mundoRigs } from './champion.js';
+import { getChampionConfig } from '../shared/champions/index.js';
+import type { ChampionId } from '../shared/types.js';
+import { championRigs, getCachedProjectileTemplate } from './champion.js';
 import { scene, vfxTextures } from './scene.js';
-import { Q_RADIUS, Q_RANGE, Q_SPEED, state } from './state.js';
+import { state } from './state.js';
 
 interface ActiveProjectileEntry {
   meshGroup: THREE.Group;
   spinner: THREE.Object3D;
+  spinAxis: 'x' | 'y' | 'z';
+  spinSpeed: number;
+  materials: THREE.Material[];
+}
+
+interface ActiveGroundZoneEntry {
+  group: THREE.Group;
+  fillMesh: THREE.Mesh;
+  runeMesh: THREE.Mesh;
   materials: THREE.Material[];
 }
 
@@ -18,13 +29,29 @@ interface TransientVfxEntry {
 }
 
 const activeProjectileMeshes = new Map<number, ActiveProjectileEntry>();
+const activeGroundZoneMeshes = new Map<number, ActiveGroundZoneEntry>();
 const transientVfx: TransientVfxEntry[] = [];
 const seenProjIds = new Set<number>();
+const seenZoneIds = new Set<number>();
 
 // Shared reusable geometries (never disposed per-effect, zero runtime allocations)
-const sharedProjRingGeo = new THREE.RingGeometry(42, 56, 24);
-sharedProjRingGeo.rotateX(-Math.PI / 2);
+const sharedUnitRingGeo = new THREE.RingGeometry(0.7, 0.93, 28);
+sharedUnitRingGeo.rotateX(-Math.PI / 2);
+
+const sharedZoneOuterRingGeo = new THREE.RingGeometry(0.92, 1.0, 48);
+sharedZoneOuterRingGeo.rotateX(-Math.PI / 2);
+
+const sharedZoneRuneRingGeo = new THREE.RingGeometry(0.58, 0.67, 6);
+sharedZoneRuneRingGeo.rotateX(-Math.PI / 2);
+
+const sharedZoneFillGeo = new THREE.CircleGeometry(1, 40);
+sharedZoneFillGeo.rotateX(-Math.PI / 2);
+
+const sharedVoidSpikeGeo = new THREE.ConeGeometry(16, 130, 5);
+sharedVoidSpikeGeo.translate(0, 65, 0);
+
 const sharedProjFallbackGeo = new THREE.BoxGeometry(22, 55, 140);
+const sharedOrbGeo = new THREE.SphereGeometry(1, 14, 12);
 
 const sharedRingBurstGeo = new THREE.RingGeometry(1, 1.35, 36);
 sharedRingBurstGeo.rotateX(-Math.PI / 2);
@@ -56,16 +83,47 @@ export function syncProjectiles(dt: number): void {
     seenProjIds.add(proj.id);
     let entry = activeProjectileMeshes.get(proj.id);
     if (!entry) {
+      const champ = getChampionConfig(proj.championId);
       const meshGroup = new THREE.Group();
       const materials: THREE.Material[] = [];
       let spinner: THREE.Object3D;
-      if (cleaverTemplateMesh) {
-        spinner = cleaverTemplateMesh.clone();
+      let spinAxis: 'x' | 'y' | 'z' = 'x';
+      let spinSpeed = 24;
+
+      const qCfg = champ.q;
+      if (qCfg.archetype === 'linear_projectile') {
+        const vis = qCfg.projectileVisual;
+        if (vis.kind === 'obj_model') {
+          const tpl = getCachedProjectileTemplate(proj.championId);
+          if (tpl) {
+            spinner = tpl.clone();
+          } else {
+            const fallbackMat = new THREE.MeshStandardMaterial({ color: 0xd0e8ff, metalness: 0.8 });
+            materials.push(fallbackMat);
+            spinner = new THREE.Mesh(sharedProjFallbackGeo, fallbackMat);
+          }
+          spinAxis = vis.spinAxis;
+          spinSpeed = vis.spinSpeed;
+        } else {
+          const orbMat = new THREE.MeshStandardMaterial({
+            color: vis.coreColorHex,
+            emissive: new THREE.Color(vis.glowColorHex),
+            emissiveIntensity: 1.2,
+            roughness: 0.2
+          });
+          materials.push(orbMat);
+          const orbMesh = new THREE.Mesh(sharedOrbGeo, orbMat);
+          orbMesh.scale.setScalar(vis.radius * 0.55);
+          spinner = orbMesh;
+          spinAxis = 'y';
+          spinSpeed = 10;
+        }
       } else {
         const fallbackMat = new THREE.MeshStandardMaterial({ color: 0xd0e8ff, metalness: 0.8 });
         materials.push(fallbackMat);
         spinner = new THREE.Mesh(sharedProjFallbackGeo, fallbackMat);
       }
+
       meshGroup.add(spinner);
 
       const ringMat = new THREE.MeshBasicMaterial({
@@ -76,7 +134,8 @@ export function syncProjectiles(dt: number): void {
         depthWrite: false
       });
       materials.push(ringMat);
-      const groundRing = new THREE.Mesh(sharedProjRingGeo, ringMat);
+      const groundRing = new THREE.Mesh(sharedUnitRingGeo, ringMat);
+      groundRing.scale.setScalar(proj.radius);
       groundRing.position.y = -62;
       meshGroup.add(groundRing);
 
@@ -84,19 +143,18 @@ export function syncProjectiles(dt: number): void {
       meshGroup.rotation.y = Math.atan2(proj.dirX, proj.dirZ);
       scene.add(meshGroup);
 
-      entry = { meshGroup, spinner, materials };
+      entry = { meshGroup, spinner, spinAxis, spinSpeed, materials };
       activeProjectileMeshes.set(proj.id, entry);
     } else {
-      // Extrapolate along flight vector for 60+ fps smoothness, then gently correct to server snapshot
-      entry.meshGroup.position.x += proj.dirX * Q_SPEED * dt;
-      entry.meshGroup.position.z += proj.dirZ * Q_SPEED * dt;
+      entry.meshGroup.position.x += proj.dirX * proj.speed * dt;
+      entry.meshGroup.position.z += proj.dirZ * proj.speed * dt;
       const corr = Math.min(1, dt * 18);
       entry.meshGroup.position.x += (proj.x - entry.meshGroup.position.x) * corr;
       entry.meshGroup.position.z += (proj.z - entry.meshGroup.position.z) * corr;
       entry.meshGroup.rotation.y = Math.atan2(proj.dirX, proj.dirZ);
     }
 
-    entry.spinner.rotation.x += dt * 24;
+    entry.spinner.rotation[entry.spinAxis] += dt * entry.spinSpeed;
   }
 
   for (const [id, entry] of activeProjectileMeshes.entries()) {
@@ -105,6 +163,169 @@ export function syncProjectiles(dt: number): void {
       for (const m of entry.materials) m.dispose();
       activeProjectileMeshes.delete(id);
     }
+  }
+}
+
+export function syncGroundZones(dt: number): void {
+  seenZoneIds.clear();
+
+  for (const zone of state.serverGroundZones) {
+    seenZoneIds.add(zone.id);
+    let entry = activeGroundZoneMeshes.get(zone.id);
+    const isAlly = zone.ownerSlot === state.mySlot;
+    const champ = getChampionConfig(zone.championId);
+    const defaultColor =
+      champ.q.archetype === 'delayed_ground_aoe' ? champ.q.zoneVisual.telegraphColorHex : 0xff2f6d;
+
+    if (!entry) {
+      const group = new THREE.Group();
+      group.position.set(zone.x, 3.5, zone.z);
+
+      const ringColor = isAlly ? 0x9b5cff : defaultColor;
+      const outerMat = new THREE.MeshBasicMaterial({
+        color: ringColor,
+        transparent: true,
+        opacity: 0.92,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      });
+      const outerMesh = new THREE.Mesh(sharedZoneOuterRingGeo, outerMat);
+      outerMesh.scale.setScalar(zone.radius);
+      group.add(outerMesh);
+
+      const runeMat = new THREE.MeshBasicMaterial({
+        color: isAlly ? 0xd29bff : 0xff6b8b,
+        transparent: true,
+        opacity: 0.72,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+      const runeMesh = new THREE.Mesh(sharedZoneRuneRingGeo, runeMat);
+      runeMesh.scale.setScalar(zone.radius);
+      runeMesh.position.y = 0.8;
+      group.add(runeMesh);
+
+      const fillMat = new THREE.MeshBasicMaterial({
+        color: ringColor,
+        transparent: true,
+        opacity: 0.28,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+      const fillMesh = new THREE.Mesh(sharedZoneFillGeo, fillMat);
+      fillMesh.position.y = 0.4;
+      group.add(fillMesh);
+
+      scene.add(group);
+      entry = {
+        group,
+        fillMesh,
+        runeMesh,
+        materials: [outerMat, runeMat, fillMat]
+      };
+      activeGroundZoneMeshes.set(zone.id, entry);
+    }
+
+    const progress =
+      zone.duration > 0 ? Math.max(0.05, Math.min(1, 1 - zone.remaining / zone.duration)) : 1;
+    entry.fillMesh.scale.setScalar(zone.radius * progress);
+    entry.runeMesh.rotation.y += dt * 1.9;
+  }
+
+  for (const [id, entry] of activeGroundZoneMeshes.entries()) {
+    if (!seenZoneIds.has(id)) {
+      scene.remove(entry.group);
+      for (const m of entry.materials) m.dispose();
+      activeGroundZoneMeshes.delete(id);
+    }
+  }
+}
+
+export function spawnZoneEruptionVfx(
+  championId: ChampionId,
+  x: number,
+  z: number,
+  radius: number
+): void {
+  const champ = getChampionConfig(championId);
+  const eruptColor =
+    champ.q.archetype === 'delayed_ground_aoe' ? champ.q.zoneVisual.eruptColorHex : 0xb833ff;
+  const spikeColor =
+    champ.q.archetype === 'delayed_ground_aoe' ? champ.q.zoneVisual.spikeColorHex : 0x3b1259;
+
+  spawnRingBurstVfx(x, z, eruptColor, radius * 0.25, radius * 1.15, 0.42);
+
+  const spikeGroup = new THREE.Group();
+  spikeGroup.position.set(x, 0, z);
+
+  const spikeMat = new THREE.MeshStandardMaterial({
+    color: spikeColor,
+    emissive: new THREE.Color(eruptColor),
+    emissiveIntensity: 0.65,
+    roughness: 0.35,
+    metalness: 0.35,
+    transparent: true,
+    opacity: 0.96
+  });
+
+  const spikeCount = 13;
+  const spikes: Array<{ mesh: THREE.Mesh; maxScale: number }> = [];
+  for (let i = 0; i < spikeCount; i++) {
+    const isCenter = i < 3;
+    const dist = isCenter ? Math.random() * radius * 0.25 : radius * (0.35 + Math.random() * 0.55);
+    const angle = (i / spikeCount) * Math.PI * 2 + Math.random() * 0.4;
+    const mesh = new THREE.Mesh(sharedVoidSpikeGeo, spikeMat);
+    mesh.position.set(Math.cos(angle) * dist, -55, Math.sin(angle) * dist);
+    mesh.rotation.set(
+      (Math.random() - 0.5) * 0.48,
+      Math.random() * Math.PI * 2,
+      (Math.random() - 0.5) * 0.48
+    );
+    const maxScale = isCenter ? 1.2 + Math.random() * 0.35 : 0.72 + Math.random() * 0.45;
+    mesh.scale.set(maxScale, 0.05, maxScale);
+    mesh.castShadow = true;
+    spikeGroup.add(mesh);
+    spikes.push({ mesh, maxScale });
+  }
+
+  scene.add(spikeGroup);
+
+  transientVfx.push({
+    mesh: spikeGroup,
+    age: 0,
+    duration: 0.62,
+    update() {
+      const t = this.age / this.duration;
+      const pop = t < 0.2 ? t / 0.2 : 1;
+      const sink = t > 0.55 ? (t - 0.55) / 0.45 : 0;
+      const yScale = Math.max(0.05, pop * (1 - sink * 0.85));
+      for (const s of spikes) {
+        s.mesh.scale.set(s.maxScale, s.maxScale * yScale, s.maxScale);
+        s.mesh.position.y = -55 + pop * 55 - sink * 85;
+      }
+      spikeMat.opacity = t > 0.65 ? Math.max(0, 1 - (t - 0.65) / 0.35) : 0.96;
+    },
+    onDispose() {
+      spikeMat.dispose();
+    }
+  });
+
+  for (let i = 0; i < 14; i++) {
+    const angle = (i / 14) * Math.PI * 2 + Math.random() * 0.3;
+    const r = Math.random() * radius * 0.85;
+    spawnSparkleParticle(
+      x + Math.cos(angle) * r,
+      15 + Math.random() * 45,
+      z + Math.sin(angle) * r,
+      Math.cos(angle) * (40 + Math.random() * 75),
+      130 + Math.random() * 140,
+      Math.sin(angle) * (40 + Math.random() * 75),
+      eruptColor,
+      30 + Math.random() * 22,
+      0.38 + Math.random() * 0.22
+    );
   }
 }
 
@@ -208,7 +429,6 @@ function getMoveArrowAssets(): { geo: THREE.BufferGeometry; tex: THREE.CanvasTex
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, 64, 64);
 
-    // Subtle dark border on outer and inner ends
     ctx.fillStyle = 'rgba(10, 70, 10, 0.75)';
     ctx.fillRect(0, 0, 4, 64);
     ctx.fillRect(60, 0, 4, 64);
@@ -438,7 +658,7 @@ export function spawnFlashVfx(
   toX: number,
   toZ: number
 ): void {
-  const rig = mundoRigs[slot];
+  const rig = championRigs[slot];
   if (rig) {
     rig.triggerFlashBlink(toX, toZ);
   }
@@ -471,7 +691,7 @@ export function spawnFlashVfx(
 }
 
 export function spawnHealVfx(slot: number, x: number, z: number): void {
-  const rig = mundoRigs[slot];
+  const rig = championRigs[slot];
   if (rig) {
     rig.triggerHealOverlay();
   }
@@ -690,23 +910,64 @@ export function updateTransientVfx(dt: number): void {
   }
 }
 
-const indicatorGroup = new THREE.Group();
-indicatorGroup.visible = false;
-scene.add(indicatorGroup);
+// ============================================================================
+// DYNAMIC SKILLSHOT INDICATOR (LINE OR GROUND AOE CIRCLE PER CHAMPION)
+// ============================================================================
+const lineIndicatorGroup = new THREE.Group();
+lineIndicatorGroup.visible = false;
+scene.add(lineIndicatorGroup);
 
-const indLineGeo = new THREE.PlaneGeometry(Q_RADIUS * 2, Q_RANGE);
-indLineGeo.translate(0, Q_RANGE / 2, 0);
-indLineGeo.rotateX(-Math.PI / 2);
-const indLineMat = new THREE.MeshBasicMaterial({
+const lineIndicatorMat = new THREE.MeshBasicMaterial({
   color: 0x0ac8b9,
   transparent: true,
   opacity: 0.32,
   side: THREE.DoubleSide,
   depthWrite: false
 });
-const indLineMesh = new THREE.Mesh(indLineGeo, indLineMat);
-indLineMesh.position.y = 4;
-indicatorGroup.add(indLineMesh);
+const lineGeoCache = new Map<string, THREE.PlaneGeometry>();
+const lineIndicatorMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), lineIndicatorMat);
+lineIndicatorMesh.position.y = 4;
+lineIndicatorGroup.add(lineIndicatorMesh);
+
+const circleRangeRingGeo = new THREE.RingGeometry(0.985, 1.0, 64);
+circleRangeRingGeo.rotateX(-Math.PI / 2);
+const circleRangeRingMat = new THREE.MeshBasicMaterial({
+  color: 0x0ac8b9,
+  transparent: true,
+  opacity: 0.38,
+  side: THREE.DoubleSide,
+  depthWrite: false
+});
+const circleRangeMesh = new THREE.Mesh(circleRangeRingGeo, circleRangeRingMat);
+circleRangeMesh.visible = false;
+circleRangeMesh.position.y = 3;
+scene.add(circleRangeMesh);
+
+const circleTargetGroup = new THREE.Group();
+circleTargetGroup.visible = false;
+scene.add(circleTargetGroup);
+
+const circleTargetFillMat = new THREE.MeshBasicMaterial({
+  color: 0xb833ff,
+  transparent: true,
+  opacity: 0.28,
+  side: THREE.DoubleSide,
+  depthWrite: false
+});
+const circleTargetFill = new THREE.Mesh(sharedZoneFillGeo, circleTargetFillMat);
+circleTargetFill.position.y = 4;
+circleTargetGroup.add(circleTargetFill);
+
+const circleTargetRimMat = new THREE.MeshBasicMaterial({
+  color: 0xd980ff,
+  transparent: true,
+  opacity: 0.85,
+  side: THREE.DoubleSide,
+  depthWrite: false
+});
+const circleTargetRim = new THREE.Mesh(sharedZoneOuterRingGeo, circleTargetRimMat);
+circleTargetRim.position.y = 4.5;
+circleTargetGroup.add(circleTargetRim);
 
 export function updateSkillshotIndicator(): void {
   const myPlayer = state.serverPlayers[state.mySlot];
@@ -716,12 +977,58 @@ export function updateSkillshotIndicator(): void {
     !myPlayer.alive ||
     state.roomState !== 'playing'
   ) {
-    indicatorGroup.visible = false;
+    lineIndicatorGroup.visible = false;
+    circleRangeMesh.visible = false;
+    circleTargetGroup.visible = false;
     return;
   }
-  indicatorGroup.visible = true;
-  indicatorGroup.position.set(myPlayer.x, 0, myPlayer.z);
+
+  const champ = getChampionConfig(myPlayer.championId);
+  const ind = champ.q.indicator;
+
+  if (ind.shape === 'line') {
+    circleRangeMesh.visible = false;
+    circleTargetGroup.visible = false;
+    lineIndicatorGroup.visible = true;
+
+    const key = `${ind.width}x${ind.range}`;
+    let geo = lineGeoCache.get(key);
+    if (!geo) {
+      geo = new THREE.PlaneGeometry(ind.width, ind.range);
+      geo.translate(0, ind.range / 2, 0);
+      geo.rotateX(-Math.PI / 2);
+      lineGeoCache.set(key, geo);
+    }
+    if (lineIndicatorMesh.geometry !== geo) {
+      lineIndicatorMesh.geometry = geo;
+    }
+    lineIndicatorMat.color.setHex(ind.colorHex);
+
+    lineIndicatorGroup.position.set(myPlayer.x, 0, myPlayer.z);
+    const dx = state.mouseWorld.x - myPlayer.x;
+    const dz = state.mouseWorld.z - myPlayer.z;
+    lineIndicatorGroup.rotation.y = Math.atan2(dx, dz) + Math.PI;
+    return;
+  }
+
+  // Circular ground AoE indicator clamped to ability range
+  lineIndicatorGroup.visible = false;
+  circleRangeMesh.visible = true;
+  circleRangeMesh.position.set(myPlayer.x, 3, myPlayer.z);
+  circleRangeMesh.scale.setScalar(ind.range);
+  circleRangeRingMat.color.setHex(ind.colorHex);
+
+  circleTargetGroup.visible = true;
   const dx = state.mouseWorld.x - myPlayer.x;
   const dz = state.mouseWorld.z - myPlayer.z;
-  indicatorGroup.rotation.y = Math.atan2(dx, dz) + Math.PI;
+  const dist = Math.hypot(dx, dz);
+  const clampedDist = Math.min(dist, ind.range);
+  const tx = dist > 1e-3 ? myPlayer.x + (dx / dist) * clampedDist : myPlayer.x;
+  const tz = dist > 1e-3 ? myPlayer.z + (dz / dist) * clampedDist : myPlayer.z;
+
+  circleTargetGroup.position.set(tx, 0, tz);
+  circleTargetFill.scale.setScalar(ind.radius);
+  circleTargetRim.scale.setScalar(ind.radius);
+  circleTargetFillMat.color.setHex(ind.colorHex);
+  circleTargetRimMat.color.setHex(ind.colorHex);
 }

@@ -1,6 +1,8 @@
 import * as THREE from 'three';
+import { CHAMPION_LIST, getChampionConfig, normalizeChampionId } from '../shared/champions/index.js';
+import { SUMMONER_SPELLS } from '../shared/constants.js';
 import { audio } from './audio.js';
-import { mundoRigs } from './champion.js';
+import { championRigs } from './champion.js';
 import { camera } from './scene.js';
 import { PIT_RADIUS, SPELL_ICONS, getEl, state } from './state.js';
 const combatTextLayer = getEl('combat-text-layer');
@@ -12,8 +14,8 @@ export function worldToScreen(x, y, z) {
         y: (-_projVec.y * 0.5 + 0.5) * window.innerHeight
     };
 }
-export function spawnFloatingCombatText(x, z, text, cssClass = 'magic-dmg') {
-    const pos = worldToScreen(x, 195, z);
+export function spawnFloatingCombatText(x, z, text, cssClass = 'magic-dmg', worldY = 195) {
+    const pos = worldToScreen(x, worldY, z);
     const el = document.createElement('div');
     el.className = `floating-combat-text ${cssClass}`;
     el.textContent = text;
@@ -25,18 +27,23 @@ export function spawnFloatingCombatText(x, z, text, cssClass = 'magic-dmg') {
 let fhbCache = null;
 function getFloatingBarCache() {
     if (!fhbCache) {
-        fhbCache = [0, 1].map((i) => ({
-            root: getEl(`fhb-${i}`),
-            name: getEl(`fhb-name-${i}`),
-            fill: getEl(`fhb-fill-${i}`),
-            trail: getEl(`fhb-trail-${i}`),
-            visible: false,
-            lastClass: '',
-            lastName: '',
-            lastPct: '',
-            lastX: NaN,
-            lastY: NaN
-        }));
+        fhbCache = [0, 1].map((i) => {
+            const root = getEl(`fhb-${i}`);
+            return {
+                root,
+                name: getEl(`fhb-name-${i}`),
+                level: root.querySelector('.fhb-level-box'),
+                fill: getEl(`fhb-fill-${i}`),
+                trail: getEl(`fhb-trail-${i}`),
+                visible: false,
+                lastClass: '',
+                lastName: '',
+                lastLevel: '',
+                lastPct: '',
+                lastX: NaN,
+                lastY: NaN
+            };
+        });
     }
     return fhbCache;
 }
@@ -48,7 +55,7 @@ export function updateFloatingHealthBars() {
     for (let i = 0; i < 2; i++) {
         const bar = bars[i];
         const p = state.serverPlayers[i];
-        const rig = mundoRigs[i];
+        const rig = championRigs[i];
         if (!inMatch || !p || !p.alive) {
             if (bar.visible) {
                 bar.root.style.display = 'none';
@@ -65,7 +72,16 @@ export function updateFloatingHealthBars() {
             bar.root.className = cls;
             bar.lastClass = cls;
         }
-        const screenPos = worldToScreen(rig.root.position.x, 225, rig.root.position.z);
+        const champ = getChampionConfig(p.championId);
+        const levelStr = String(champ.hud.level);
+        if (bar.lastLevel !== levelStr) {
+            bar.level.textContent = levelStr;
+            bar.lastLevel = levelStr;
+        }
+        const knockupOffset = p.knockupTimer > 0 && p.knockupDuration > 0
+            ? Math.sin((1 - p.knockupTimer / p.knockupDuration) * Math.PI) * 155
+            : 0;
+        const screenPos = worldToScreen(rig.root.position.x, 225 + knockupOffset, rig.root.position.z);
         const sx = Math.round(screenPos.x * 2) / 2;
         const sy = Math.round(screenPos.y * 2) / 2;
         if (bar.lastX !== sx || bar.lastY !== sy) {
@@ -104,11 +120,29 @@ function getHudDom() {
             dot1: getEl('minimap-dot-1'),
             roundLabel: getEl('hud-round-label'),
             accLabel: getEl('hud-accuracy-label'),
+            statAd: getEl('hud-stat-ad'),
+            statMr: getEl('hud-stat-mr'),
+            statArm: getEl('hud-stat-arm'),
             statHits: getEl('hud-stat-hits'),
+            statRegen: getEl('hud-stat-regen'),
             statMs: getEl('hud-stat-ms'),
+            champPortrait: getEl('hud-champ-portrait'),
+            champLevel: getEl('hud-champ-level'),
+            slotP: getEl('hud-slot-p'),
+            imgP: getEl('hud-img-p'),
+            slotQ: getEl('hud-slot-q'),
+            imgQ: getEl('hud-img-q'),
+            qCost: getEl('hud-q-cost'),
+            slotW: getEl('hud-slot-w'),
+            imgW: getEl('hud-img-w'),
+            slotE: getEl('hud-slot-e'),
+            imgE: getEl('hud-img-e'),
+            slotR: getEl('hud-slot-r'),
+            imgR: getEl('hud-img-r'),
             hpFill: getEl('hud-hp-bar-fill'),
             hpText: getEl('hud-hp-bar-text'),
             hpRegen: getEl('hud-hp-regen'),
+            resFill: getEl('hud-res-fill'),
             cdQ: getEl('hud-cd-q'),
             imgD: getEl('hud-img-d'),
             imgF: getEl('hud-img-f'),
@@ -120,14 +154,46 @@ function getHudDom() {
     }
     return hudDom;
 }
+function applyChampionHudChrome(dom, champId) {
+    if (hudPrev.champChrome === champId)
+        return;
+    hudPrev.champChrome = champId;
+    const champ = getChampionConfig(champId);
+    dom.champPortrait.src = champ.hud.icons.circle;
+    dom.champPortrait.alt = champ.name;
+    dom.champLevel.textContent = String(champ.hud.level);
+    dom.statAd.textContent = String(champ.hud.displayStats.ad);
+    dom.statMr.textContent = String(champ.hud.displayStats.mr);
+    dom.statArm.textContent = String(champ.hud.displayStats.armor);
+    dom.statRegen.textContent = String(champ.stats.hpRegenPerSec);
+    dom.hpRegen.textContent = `+${champ.stats.hpRegenPerSec.toFixed(1)}`;
+    dom.imgP.src = champ.hud.icons.passive;
+    dom.slotP.title = `Passive: ${champ.hud.passive.name} — ${champ.hud.passive.description}`;
+    dom.imgQ.src = champ.hud.icons.q;
+    dom.slotQ.title = `${champ.q.name} (Q): ${champ.q.description}`;
+    dom.qCost.textContent = champ.q.costLabel;
+    dom.imgW.src = champ.hud.icons.w;
+    dom.slotW.title = `${champ.hud.disabledAbilities.w.name} (W) — ${champ.hud.disabledAbilities.w.description}`;
+    dom.imgE.src = champ.hud.icons.e;
+    dom.slotE.title = `${champ.hud.disabledAbilities.e.name} (E) — ${champ.hud.disabledAbilities.e.description}`;
+    dom.imgR.src = champ.hud.icons.r;
+    dom.slotR.title = `${champ.hud.disabledAbilities.r.name} (R) — ${champ.hud.disabledAbilities.r.description}`;
+    dom.resFill.style.background = champ.hud.resource.barColor;
+}
 export function updateInGameHud() {
     const dom = getHudDom();
     const p0 = state.serverPlayers[0];
     const p1 = state.serverPlayers[1];
     const me = state.serverPlayers[state.mySlot];
     if (p0) {
+        const c0 = getChampionConfig(p0.championId);
         setTextIfChanged('bName', dom.blueName, p0.name);
         setTextIfChanged('bScore', dom.blueScore, String(p0.score || 0));
+        const dot0Img = `url("${c0.hud.icons.circle}")`;
+        if (hudPrev.d0img !== dot0Img) {
+            dom.dot0.style.backgroundImage = dot0Img;
+            hudPrev.d0img = dot0Img;
+        }
         const mx = `${(50 + (p0.x / PIT_RADIUS) * 20).toFixed(2)}%`;
         const my = `${(50 + (p0.z / PIT_RADIUS) * 20).toFixed(2)}%`;
         if (hudPrev.d0x !== mx) {
@@ -140,8 +206,14 @@ export function updateInGameHud() {
         }
     }
     if (p1) {
+        const c1 = getChampionConfig(p1.championId);
         setTextIfChanged('rName', dom.redName, p1.name);
         setTextIfChanged('rScore', dom.redScore, String(p1.score || 0));
+        const dot1Img = `url("${c1.hud.icons.circle}")`;
+        if (hudPrev.d1img !== dot1Img) {
+            dom.dot1.style.backgroundImage = dot1Img;
+            hudPrev.d1img = dot1Img;
+        }
         const mx = `${(50 + (p1.x / PIT_RADIUS) * 20).toFixed(2)}%`;
         const my = `${(50 + (p1.z / PIT_RADIUS) * 20).toFixed(2)}%`;
         if (hudPrev.d1x !== mx) {
@@ -156,18 +228,20 @@ export function updateInGameHud() {
     setTextIfChanged('round', dom.roundLabel, `ROUND ${state.round} (BO${state.bestOf})`);
     if (!me)
         return;
+    const myChamp = getChampionConfig(me.championId);
+    applyChampionHudChrome(dom, myChamp.id);
     const thrown = me.stats?.abilitiesCast || 0;
     const hits = me.stats?.abilitiesHit || 0;
     const acc = thrown > 0 ? Math.round((hits / thrown) * 100) : 0;
-    setTextIfChanged('acc', dom.accLabel, `Cleaver Acc: ${acc}% (${hits}/${thrown})`);
+    setTextIfChanged('acc', dom.accLabel, `${myChamp.hud.accuracyLabel}: ${acc}% (${hits}/${thrown})`);
     setTextIfChanged('hits', dom.statHits, `${hits}`);
-    let ms = 385;
+    let ms = myChamp.stats.baseMoveSpeed;
     if (me.ghostTimer > 0)
-        ms = Math.round(ms * 1.38);
+        ms = Math.round(ms * (1 + SUMMONER_SPELLS.ghost.speedBoost));
     if (me.healSpeedTimer > 0)
-        ms = Math.round(ms * 1.3);
+        ms = Math.round(ms * (1 + SUMMONER_SPELLS.heal.speedBoost));
     if (me.slowTimer > 0)
-        ms = Math.round(ms * 0.6);
+        ms = Math.round(ms * (1 - (me.slowPercent || 0.4)));
     setTextIfChanged('ms', dom.statMs, `${ms}`);
     const hpPct = `${Math.max(0, Math.min(100, (me.hp / me.maxHp) * 100)).toFixed(2)}%`;
     if (hudPrev.hpPct !== hpPct) {
@@ -175,7 +249,6 @@ export function updateInGameHud() {
         hudPrev.hpPct = hpPct;
     }
     setTextIfChanged('hpText', dom.hpText, `${Math.round(me.hp)} / ${me.maxHp}`);
-    setTextIfChanged('hpRegen', dom.hpRegen, '+16.0');
     if (me.qCd > 0) {
         if (hudPrev.cdQVis !== '1') {
             dom.cdQ.classList.remove('hidden');
@@ -238,7 +311,6 @@ function getPerfClass(kind, value) {
         return 'perf-value perf-warn';
     return 'perf-value perf-bad';
 }
-/** Update the top-right FPS and ping readout using dirty-checked DOM writes. */
 export function updatePerformanceHud() {
     const dom = getHudDom();
     const fpsText = state.fps === null ? '--' : `${state.fps}`;
@@ -275,6 +347,49 @@ export function showToast(message) {
     toast.textContent = message;
     toastContainer.appendChild(toast);
     setTimeout(() => toast.remove(), 3200);
+}
+export function renderChampionPickerUI(containerId, summaryId, selectedChampionId) {
+    const containerEl = document.getElementById(containerId);
+    if (!containerEl)
+        return;
+    const selected = getChampionConfig(selectedChampionId);
+    const summaryEl = document.getElementById(summaryId);
+    if (summaryEl) {
+        summaryEl.textContent = `${selected.name} — ${selected.q.name} (Q)`;
+    }
+    containerEl.querySelectorAll('.champion-option-card').forEach((card) => {
+        const cid = card.getAttribute('data-champion');
+        card.classList.toggle('selected', cid === selected.id);
+    });
+}
+export function initChampionPicker(containerId, summaryId, onChampionSelected) {
+    const containerEl = document.getElementById(containerId);
+    if (!containerEl)
+        return;
+    containerEl.innerHTML = CHAMPION_LIST.map((champ) => `
+      <div class="champion-option-card clickable${champ.id === state.myChampionId ? ' selected' : ''}" data-champion="${champ.id}" title="${champ.q.description}">
+        <img src="${champ.hud.icons.square}" alt="${champ.name}" />
+        <div class="champion-option-info">
+          <strong>${champ.name}</strong>
+          <span>Q: ${champ.q.name}</span>
+        </div>
+      </div>
+    `).join('');
+    renderChampionPickerUI(containerId, summaryId, state.myChampionId);
+    containerEl.querySelectorAll('.champion-option-card').forEach((card) => {
+        card.addEventListener('click', () => {
+            audio.ensureContext();
+            const cid = normalizeChampionId(card.getAttribute('data-champion'));
+            state.myChampionId = cid;
+            renderChampionPickerUI('home-champion-picker', 'home-champion-summary', cid);
+            renderChampionPickerUI('lobby-champion-picker', 'lobby-champion-summary', cid);
+            const brandAvatar = document.getElementById('brand-avatar-img');
+            if (brandAvatar) {
+                brandAvatar.src = getChampionConfig(cid).hud.icons.circle;
+            }
+            onChampionSelected(cid);
+        });
+    });
 }
 export function renderSpellPickerUI(containerId, spellsArray) {
     const containerEl = document.getElementById(containerId);

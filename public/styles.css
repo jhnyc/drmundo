@@ -242,6 +242,13 @@ button, input, select, .clickable {
   font-size: 18px;
 }
 
+.floating-combat-text.cc-text {
+  color: #f5c542;
+  font-size: 15px;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+}
+
 @keyframes floatUpFade {
   0% {
     opacity: 1;
@@ -271,6 +278,7 @@ button, input, select, .clickable {
   background: radial-gradient(circle at 50% 40%, rgba(4, 15, 28, 0.45) 0%, rgba(1, 10, 19, 0.84) 85%);
   backdrop-filter: blur(3px);
   padding: 20px;
+  overflow-y: auto;
 }
 
 #lobby-overlay.hidden {
@@ -546,6 +554,120 @@ button, input, select, .clickable {
   content: '◆';
   font-size: 9px;
   color: var(--hex-gold);
+}
+
+/* Champion Selector Strip */
+.champion-picker-section {
+  background: rgba(1, 10, 19, 0.65);
+  border: 1px solid rgba(200, 170, 110, 0.28);
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+
+.champion-picker-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(185px, 1fr));
+  gap: 8px;
+}
+
+.champion-option-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: rgba(9, 20, 40, 0.85);
+  border: 1.5px solid #463714;
+  transition: all 0.15s ease;
+}
+
+.champion-option-card:hover {
+  border-color: var(--hex-gold);
+  background: rgba(24, 38, 65, 0.92);
+}
+
+.champion-option-card.selected {
+  border-color: var(--hex-gold-bright);
+  background: linear-gradient(135deg, rgba(200, 155, 60, 0.24) 0%, rgba(9, 20, 40, 0.96) 100%);
+  box-shadow: 0 0 12px rgba(200, 155, 60, 0.35);
+}
+
+.champion-option-card img {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--hex-gold);
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.champion-option-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.champion-option-info strong {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 13px;
+  color: var(--hex-gold-bright);
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+
+.champion-option-info span {
+  font-size: 11px;
+  color: #a09b8c;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bot-champion-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: rgba(1, 10, 19, 0.72);
+  border: 1px solid rgba(200, 170, 110, 0.22);
+  padding: 6px 10px;
+}
+
+.bot-champion-controls.hidden {
+  display: none;
+}
+
+.bot-champion-label {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  color: #a09b8c;
+}
+
+.bot-champion-pills {
+  display: flex;
+  gap: 6px;
+}
+
+.bot-champ-pill {
+  font-family: 'BeaufortForLoL', serif;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 8px;
+  background: rgba(9, 20, 40, 0.9);
+  border: 1px solid #463714;
+  color: #a09b8c;
+  transition: all 0.14s ease;
+}
+
+.bot-champ-pill:hover {
+  border-color: var(--hex-gold);
+  color: var(--hex-gold-bright);
+}
+
+.bot-champ-pill.active {
+  border-color: var(--lol-red);
+  background: rgba(232, 64, 87, 0.2);
+  color: #fff;
 }
 
 /* Summoner Spell Selector (Flash, Heal, Ghost) */
@@ -1376,8 +1498,9 @@ button, input, select, .clickable {
   border-radius: 50%;
   transform: translate(-50%, -50%);
   border: 2px solid #fff;
-  background-image: url('/assets/icons/drmundo_circle.png');
+  background-color: #0b1622;
   background-size: cover;
+  background-position: center;
   box-shadow: 0 0 6px #000;
 }
 

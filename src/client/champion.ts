@@ -1,11 +1,14 @@
 import * as THREE from 'three';
-import type { AnimKey } from '../shared/types.js';
+import { DEFAULT_CHAMPION_ID, getChampionConfig } from '../shared/champions/index.js';
+import type { ChampionConfig, ProjectileVisualConfig } from '../shared/champions/types.js';
+import type { AnimKey, ChampionId } from '../shared/types.js';
+import { type ProceduralRigInstance, buildProceduralChampionRig } from './proceduralRigs.js';
 import { gltfLoader, objLoader, scene, textureLoader } from './scene.js';
-import { LOL_SCALE } from './state.js';
 
 const _pelvisWorld = new THREE.Vector3();
 
 export interface RigDisplayTarget {
+  championId?: ChampionId;
   x: number;
   z: number;
   angle: number;
@@ -13,20 +16,28 @@ export interface RigDisplayTarget {
   ghostTimer: number;
   healSpeedTimer: number;
   slowTimer: number;
+  knockupTimer?: number;
+  knockupDuration?: number;
 }
 
-export class MundoChampionRig {
+export class ChampionRig {
   public slot: number;
   public root: THREE.Group;
+  public championId: ChampionId | null = null;
+  public config: ChampionConfig;
   public model: THREE.Group | null = null;
   public pelvisNode: THREE.Object3D | null = null;
   public mixer: THREE.AnimationMixer | null = null;
   public clips = new Map<string, THREE.AnimationClip>();
   public activeAction: THREE.AnimationAction | null = null;
-  public currentAnimKey = '';
-  public weaponMesh: THREE.Mesh | null = null;
-  public weaponHideTimer = 0;
+  public currentAnimKey: AnimKey | '' = '';
+  public castHiddenMesh: THREE.Mesh | null = null;
+  public castHideTimer = 0;
 
+  private loadToken = 0;
+  private proceduralRig: ProceduralRigInstance | null = null;
+  private animElapsed = 0;
+  private castAnimTimer = 0;
   private shadowDisc: THREE.Mesh;
   private bodyMaterials: THREE.MeshStandardMaterial[] = [];
   private flashTintTimer = 0;
@@ -36,8 +47,9 @@ export class MundoChampionRig {
   private lastEmissiveInt = -1;
   private lastBodyOpacity = -1;
 
-  constructor(slot: number) {
+  constructor(slot: number, initialChampionId: ChampionId = DEFAULT_CHAMPION_ID) {
     this.slot = slot;
+    this.config = getChampionConfig(initialChampionId);
     this.root = new THREE.Group();
     scene.add(this.root);
 
@@ -62,14 +74,67 @@ export class MundoChampionRig {
     }
   }
 
-  public async load(): Promise<void> {
-    const gltf = await gltfLoader.loadAsync('/assets/models/drmundo.glb');
-    this.model = gltf.scene;
-    this.model.scale.setScalar(LOL_SCALE);
-    this.model.position.set(0, 0, 0);
-    this.pelvisNode =
-      this.model.getObjectByName('Pelvis') || this.model.getObjectByName('Root') || null;
+  private clearCurrentModel(): void {
+    if (this.mixer) {
+      this.mixer.stopAllAction();
+      this.mixer = null;
+    }
+    this.clips.clear();
+    this.activeAction = null;
+    this.currentAnimKey = '';
+    this.pelvisNode = null;
+    this.castHiddenMesh = null;
+    this.proceduralRig = null;
+    this.bodyMaterials = [];
+    this.lastEmissiveHex = -1;
+    this.lastEmissiveInt = -1;
+    this.lastBodyOpacity = -1;
 
+    if (this.model) {
+      this.root.remove(this.model);
+      this.model = null;
+    }
+  }
+
+  public async load(championId: ChampionId = this.config.id): Promise<void> {
+    if (this.championId === championId && this.model) return;
+    const token = ++this.loadToken;
+    this.championId = championId;
+    this.config = getChampionConfig(championId);
+
+    const modelCfg = this.config.model;
+    const shadowScale = Math.max(0.8, this.config.stats.hitboxRadius / 65);
+    this.shadowDisc.scale.setScalar(shadowScale);
+
+    if (modelCfg.kind === 'procedural') {
+      this.clearCurrentModel();
+      const proc = buildProceduralChampionRig(modelCfg.preset, modelCfg.scale);
+      this.proceduralRig = proc;
+      this.model = proc.group;
+      this.bodyMaterials = proc.bodyMaterials;
+      this.root.add(this.model);
+      this.playAnim('idle', true);
+      return;
+    }
+
+    const gltf = await gltfLoader.loadAsync(modelCfg.url);
+    if (token !== this.loadToken) return;
+
+    this.clearCurrentModel();
+
+    this.model = gltf.scene;
+    this.model.scale.setScalar(modelCfg.scale);
+    this.model.position.set(0, 0, 0);
+
+    for (const boneName of modelCfg.pelvisBones) {
+      const node = this.model.getObjectByName(boneName);
+      if (node) {
+        this.pelvisNode = node;
+        break;
+      }
+    }
+
+    const hideCfg = modelCfg.castMeshHide;
     this.model.traverse((child: THREE.Object3D) => {
       if ((child as THREE.Mesh).isMesh) {
         const mesh = child as THREE.Mesh;
@@ -87,8 +152,12 @@ export class MundoChampionRig {
             mesh.visible = true;
             this.bodyMaterials.push(mat);
           }
-          if (mat.name === 'Weapon' || ud.hash === 1865621569) {
-            this.weaponMesh = mesh;
+          if (
+            hideCfg &&
+            (mat.name === hideCfg.materialName ||
+              (hideCfg.materialHash !== undefined && ud.hash === hideCfg.materialHash))
+          ) {
+            this.castHiddenMesh = mesh;
           }
         }
       }
@@ -101,65 +170,40 @@ export class MundoChampionRig {
       this.clips.set(clip.name, clip);
     }
 
-    this.playAnim('idle');
+    this.playAnim('idle', true);
   }
 
-  public resolveClipName(animKey: string): string {
-    switch (animKey) {
-      case 'idle':
-        return 'DrMundo_Idle01.anm';
-      case 'run':
-      case 'run_haste':
-        return 'DrMundo_Run.anm';
-      case 'q_cast':
-        return this.clips.has('Spell1_0.anm') ? 'Spell1_0.anm' : 'Spell1';
-      case 'death':
-        return 'Death';
-      case 'taunt':
-        return 'Taunt';
-      case 'joke':
-        return 'Joke';
-      case 'dance':
-        return 'Dance_Loop';
-      case 'laugh':
-        return 'Laugh';
-      case 'recall':
-        return 'Recall';
-      default:
-        return 'DrMundo_Idle01.anm';
-    }
-  }
-
-  public playAnim(animKey: string, forceRestart = false): void {
-    if (!this.mixer) return;
+  public playAnim(animKey: AnimKey, forceRestart = false): void {
     if (this.currentAnimKey === animKey && !forceRestart) return;
 
-    const clipName = this.resolveClipName(animKey);
-    const clip = this.clips.get(clipName) || this.clips.values().next().value;
+    if (this.proceduralRig) {
+      this.currentAnimKey = animKey;
+      if (animKey === 'q_cast') {
+        this.castAnimTimer = 0;
+      }
+      return;
+    }
+
+    if (!this.mixer || this.config.model.kind !== 'glb') return;
+
+    const clipCfg = this.config.model.clips[animKey] || this.config.model.clips.idle;
+    const clip =
+      this.clips.get(clipCfg.clipName) ||
+      (clipCfg.fallbackClipName ? this.clips.get(clipCfg.fallbackClipName) : undefined) ||
+      this.clips.values().next().value;
     if (!clip) return;
 
     this.currentAnimKey = animKey;
     const nextAction = this.mixer.clipAction(clip);
     nextAction.reset();
 
-    if (animKey === 'death') {
+    if (clipCfg.loop === 'once') {
       nextAction.setLoop(THREE.LoopOnce, 1);
-      nextAction.clampWhenFinished = true;
-      nextAction.timeScale = 1.0;
-    } else if (animKey === 'q_cast') {
-      nextAction.setLoop(THREE.LoopOnce, 1);
-      nextAction.clampWhenFinished = true;
-      nextAction.timeScale = 1.65;
-    } else if (animKey === 'run_haste') {
-      nextAction.setLoop(THREE.LoopRepeat, Infinity);
-      nextAction.timeScale = 1.38;
-    } else if (animKey === 'run') {
-      nextAction.setLoop(THREE.LoopRepeat, Infinity);
-      nextAction.timeScale = 1.12;
+      nextAction.clampWhenFinished = Boolean(clipCfg.clampWhenFinished ?? true);
     } else {
       nextAction.setLoop(THREE.LoopRepeat, Infinity);
-      nextAction.timeScale = 1.0;
     }
+    nextAction.timeScale = clipCfg.timeScale ?? 1.0;
 
     if (this.activeAction && this.activeAction !== nextAction) {
       nextAction.crossFadeFrom(this.activeAction, 0.12, false);
@@ -168,9 +212,14 @@ export class MundoChampionRig {
     this.activeAction = nextAction;
   }
 
-  public triggerQThrowVisual(): void {
+  public triggerCastVisual(): void {
     this.playAnim('q_cast', true);
-    this.weaponHideTimer = 0.55;
+    this.castAnimTimer = 0;
+    if (this.config.model.kind === 'glb' && this.config.model.castMeshHide) {
+      this.castHideTimer = this.config.model.castMeshHide.totalDuration;
+    } else {
+      this.castHideTimer = Math.max(0.28, this.config.q.castTime);
+    }
   }
 
   public triggerFlashBlink(toX: number, toZ: number): void {
@@ -188,16 +237,29 @@ export class MundoChampionRig {
     serverPlayer: RigDisplayTarget | null,
     onGhostTrailStep?: (x: number, z: number, facingAngle: number) => void
   ): void {
+    this.animElapsed += dt;
+    if (this.currentAnimKey === 'q_cast') {
+      this.castAnimTimer += dt;
+    }
+
+    if (serverPlayer?.championId && serverPlayer.championId !== this.championId) {
+      void this.load(serverPlayer.championId);
+    }
+
     if (this.mixer) {
       this.mixer.update(dt);
     }
 
-    if (this.weaponMesh) {
-      if (this.weaponHideTimer > 0) {
-        this.weaponHideTimer -= dt;
-        this.weaponMesh.visible = this.weaponHideTimer > 0.35 || this.weaponHideTimer <= 0;
+    const hideCfg = this.config.model.kind === 'glb' ? this.config.model.castMeshHide : undefined;
+    if (this.castHideTimer > 0) {
+      this.castHideTimer = Math.max(0, this.castHideTimer - dt);
+    }
+
+    if (this.castHiddenMesh && hideCfg) {
+      if (this.castHideTimer > 0) {
+        this.castHiddenMesh.visible = this.castHideTimer > hideCfg.visibleBeforeRemaining;
       } else {
-        this.weaponMesh.visible = true;
+        this.castHiddenMesh.visible = true;
       }
     }
 
@@ -220,18 +282,45 @@ export class MundoChampionRig {
     );
     this.root.rotation.y += diffAngle * Math.min(1, dt * 18);
 
-    if (this.model && this.pelvisNode) {
+    if (this.model && this.pelvisNode && this.config.model.kind === 'glb') {
       this.root.updateMatrixWorld(true);
       this.pelvisNode.getWorldPosition(_pelvisWorld);
       this.root.worldToLocal(_pelvisWorld);
-      this.model.position.x -= _pelvisWorld.x * 0.85;
-      this.model.position.z -= _pelvisWorld.z * 0.85;
+      const factor = this.config.model.pelvisRootMotionFactor;
+      this.model.position.x -= _pelvisWorld.x * factor;
+      this.model.position.z -= _pelvisWorld.z * factor;
     }
 
-    if (this.currentAnimKey === 'q_cast' && this.weaponHideTimer > 0.1) {
-      // Let q_cast throw animation play through its release
+    // Airborne knockup arc (applies cleanly to both GLB & procedural champions)
+    const knockupTimer = serverPlayer.knockupTimer ?? 0;
+    const knockupDuration = serverPlayer.knockupDuration ?? 0;
+    const baseShadowScale = Math.max(0.8, this.config.stats.hitboxRadius / 65);
+    if (this.model) {
+      if (knockupTimer > 0 && knockupDuration > 0) {
+        const progress = Math.max(0, Math.min(1, 1 - knockupTimer / knockupDuration));
+        const arcY = Math.sin(progress * Math.PI) * 155;
+        this.model.position.y = arcY;
+        this.shadowDisc.scale.setScalar(baseShadowScale * (1 - 0.35 * Math.sin(progress * Math.PI)));
+      } else {
+        this.model.position.y = 0;
+        this.shadowDisc.scale.setScalar(baseShadowScale);
+      }
+    }
+
+    const lockRemaining = hideCfg ? hideCfg.lockAnimUntilRemaining : 0.05;
+    if (this.currentAnimKey === 'q_cast' && this.castHideTimer > lockRemaining) {
+      // Allow Q cast animation to play through release
     } else {
       this.playAnim(serverPlayer.anim || 'idle');
+    }
+
+    if (this.proceduralRig) {
+      this.proceduralRig.animate(
+        this.currentAnimKey || 'idle',
+        dt,
+        this.animElapsed,
+        this.castAnimTimer
+      );
     }
 
     let emissiveHex = 0x000000;
@@ -288,38 +377,72 @@ export class MundoChampionRig {
   }
 }
 
-export const mundoRigs: [MundoChampionRig, MundoChampionRig] = [
-  new MundoChampionRig(0),
-  new MundoChampionRig(1)
+export const championRigs: [ChampionRig, ChampionRig] = [
+  new ChampionRig(0, DEFAULT_CHAMPION_ID),
+  new ChampionRig(1, DEFAULT_CHAMPION_ID)
 ];
 
-export let cleaverTemplateMesh: THREE.Group | null = null;
+const projectileTemplateCache = new Map<string, THREE.Group>();
+const projectileLoadingPromises = new Map<string, Promise<THREE.Group | null>>();
 
-export async function loadCleaverProjectileTemplate(): Promise<void> {
-  const [weaponObj, weaponTex] = await Promise.all([
-    objLoader.loadAsync('/assets/models/Weapon.obj'),
-    textureLoader.loadAsync('/assets/models/drmundo_base_weapon_tx_cm.png')
-  ]);
-  weaponTex.colorSpace = THREE.SRGBColorSpace;
+export function getCachedProjectileTemplate(championId: ChampionId): THREE.Group | null {
+  const champ = getChampionConfig(championId);
+  if (champ.q.archetype !== 'linear_projectile') return null;
+  if (champ.q.projectileVisual.kind !== 'obj_model') return null;
 
-  const group = new THREE.Group();
-  weaponObj.traverse((child: THREE.Object3D) => {
-    if ((child as THREE.Mesh).isMesh) {
-      const mesh = child as THREE.Mesh;
-      mesh.geometry.center();
-      mesh.material = new THREE.MeshStandardMaterial({
-        map: weaponTex,
-        roughness: 0.3,
-        metalness: 0.55,
-        emissive: new THREE.Color(0x1b4d2e),
-        emissiveIntensity: 0.35,
-        side: THREE.DoubleSide
+  const key = `${champ.q.projectileVisual.objUrl}|${champ.q.projectileVisual.textureUrl}`;
+  const cached = projectileTemplateCache.get(key);
+  if (!cached) {
+    void loadProjectileTemplate(champ.q.projectileVisual);
+    return null;
+  }
+  return cached;
+}
+
+export async function loadProjectileTemplate(visual: ProjectileVisualConfig): Promise<THREE.Group | null> {
+  if (visual.kind !== 'obj_model') return null;
+  const key = `${visual.objUrl}|${visual.textureUrl}`;
+  const existing = projectileTemplateCache.get(key);
+  if (existing) return existing;
+
+  const inflight = projectileLoadingPromises.get(key);
+  if (inflight) return inflight;
+
+  const promise = (async (): Promise<THREE.Group | null> => {
+    try {
+      const [weaponObj, weaponTex] = await Promise.all([
+        objLoader.loadAsync(visual.objUrl),
+        textureLoader.loadAsync(visual.textureUrl)
+      ]);
+      weaponTex.colorSpace = THREE.SRGBColorSpace;
+
+      const group = new THREE.Group();
+      weaponObj.traverse((child: THREE.Object3D) => {
+        if ((child as THREE.Mesh).isMesh) {
+          const mesh = child as THREE.Mesh;
+          mesh.geometry.center();
+          mesh.material = new THREE.MeshStandardMaterial({
+            map: weaponTex,
+            roughness: 0.3,
+            metalness: 0.55,
+            emissive: new THREE.Color(visual.emissiveHex),
+            emissiveIntensity: visual.emissiveIntensity,
+            side: THREE.DoubleSide
+          });
+          mesh.castShadow = true;
+        }
       });
-      mesh.castShadow = true;
+      weaponObj.scale.setScalar(visual.scale);
+      group.add(weaponObj);
+      projectileTemplateCache.set(key, group);
+      return group;
+    } catch {
+      return null;
+    } finally {
+      projectileLoadingPromises.delete(key);
     }
-  });
-  weaponObj.scale.setScalar(1.45);
-  group.add(weaponObj);
+  })();
 
-  cleaverTemplateMesh = group;
+  projectileLoadingPromises.set(key, promise);
+  return promise;
 }
