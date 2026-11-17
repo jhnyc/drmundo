@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { cleaverTemplateMesh, mundoRigs } from './champion.js';
 import { scene, vfxTextures } from './scene.js';
-import { Q_RADIUS, Q_RANGE, state } from './state.js';
+import { Q_RADIUS, Q_RANGE, Q_SPEED, state } from './state.js';
 
 interface ActiveProjectileEntry {
   meshGroup: THREE.Group;
   spinner: THREE.Object3D;
+  materials: THREE.Material[];
 }
 
 interface TransientVfxEntry {
@@ -13,29 +14,60 @@ interface TransientVfxEntry {
   age: number;
   duration: number;
   update(dt: number): void;
+  onDispose?: () => void;
 }
 
 const activeProjectileMeshes = new Map<number, ActiveProjectileEntry>();
 const transientVfx: TransientVfxEntry[] = [];
+const seenProjIds = new Set<number>();
+
+// Shared reusable geometries (never disposed per-effect, zero runtime allocations)
+const sharedProjRingGeo = new THREE.RingGeometry(42, 56, 24);
+sharedProjRingGeo.rotateX(-Math.PI / 2);
+const sharedProjFallbackGeo = new THREE.BoxGeometry(22, 55, 140);
+
+const sharedRingBurstGeo = new THREE.RingGeometry(1, 1.35, 36);
+sharedRingBurstGeo.rotateX(-Math.PI / 2);
+
+const sharedSkybeamGeo = new THREE.PlaneGeometry(1, 1);
+sharedSkybeamGeo.translate(0, 0.5, 0);
+
+const sharedFlashHaloGeo = new THREE.PlaneGeometry(185, 185);
+sharedFlashHaloGeo.rotateX(-Math.PI / 2);
+
+const sharedFlashStarGeo = new THREE.PlaneGeometry(155, 155);
+sharedFlashStarGeo.rotateX(-Math.PI / 2);
+
+const sharedHealBurst1Geo = new THREE.PlaneGeometry(230, 230);
+sharedHealBurst1Geo.rotateX(-Math.PI / 2);
+
+const sharedHealBurst2Geo = new THREE.PlaneGeometry(210, 210);
+sharedHealBurst2Geo.rotateX(-Math.PI / 2);
+sharedHealBurst2Geo.rotateY(Math.PI / 4);
+
+const sharedHealBoltGeo = new THREE.CylinderGeometry(88, 64, 95, 28, 1, true);
+const sharedGhostCylGeo = new THREE.CylinderGeometry(82, 54, 125, 24, 1, true);
+const sharedGhostRibbonGeo = new THREE.PlaneGeometry(92, 42);
 
 export function syncProjectiles(dt: number): void {
-  const seenIds = new Set<number>();
+  seenProjIds.clear();
 
   for (const proj of state.serverProjectiles) {
-    seenIds.add(proj.id);
+    seenProjIds.add(proj.id);
     let entry = activeProjectileMeshes.get(proj.id);
     if (!entry) {
       const meshGroup = new THREE.Group();
-      const spinner: THREE.Object3D = cleaverTemplateMesh
-        ? cleaverTemplateMesh.clone()
-        : new THREE.Mesh(
-            new THREE.BoxGeometry(22, 55, 140),
-            new THREE.MeshStandardMaterial({ color: 0xd0e8ff, metalness: 0.8 })
-          );
+      const materials: THREE.Material[] = [];
+      let spinner: THREE.Object3D;
+      if (cleaverTemplateMesh) {
+        spinner = cleaverTemplateMesh.clone();
+      } else {
+        const fallbackMat = new THREE.MeshStandardMaterial({ color: 0xd0e8ff, metalness: 0.8 });
+        materials.push(fallbackMat);
+        spinner = new THREE.Mesh(sharedProjFallbackGeo, fallbackMat);
+      }
       meshGroup.add(spinner);
 
-      const ringGeo = new THREE.RingGeometry(42, 56, 24);
-      ringGeo.rotateX(-Math.PI / 2);
       const ringMat = new THREE.MeshBasicMaterial({
         color: proj.ownerSlot === state.mySlot ? 0x26a9ff : 0xff4254,
         transparent: true,
@@ -43,7 +75,8 @@ export function syncProjectiles(dt: number): void {
         side: THREE.DoubleSide,
         depthWrite: false
       });
-      const groundRing = new THREE.Mesh(ringGeo, ringMat);
+      materials.push(ringMat);
+      const groundRing = new THREE.Mesh(sharedProjRingGeo, ringMat);
       groundRing.position.y = -62;
       meshGroup.add(groundRing);
 
@@ -51,11 +84,15 @@ export function syncProjectiles(dt: number): void {
       meshGroup.rotation.y = Math.atan2(proj.dirX, proj.dirZ);
       scene.add(meshGroup);
 
-      entry = { meshGroup, spinner };
+      entry = { meshGroup, spinner, materials };
       activeProjectileMeshes.set(proj.id, entry);
     } else {
-      entry.meshGroup.position.x += (proj.x - entry.meshGroup.position.x) * Math.min(1, dt * 30);
-      entry.meshGroup.position.z += (proj.z - entry.meshGroup.position.z) * Math.min(1, dt * 30);
+      // Extrapolate along flight vector for 60+ fps smoothness, then gently correct to server snapshot
+      entry.meshGroup.position.x += proj.dirX * Q_SPEED * dt;
+      entry.meshGroup.position.z += proj.dirZ * Q_SPEED * dt;
+      const corr = Math.min(1, dt * 18);
+      entry.meshGroup.position.x += (proj.x - entry.meshGroup.position.x) * corr;
+      entry.meshGroup.position.z += (proj.z - entry.meshGroup.position.z) * corr;
       entry.meshGroup.rotation.y = Math.atan2(proj.dirX, proj.dirZ);
     }
 
@@ -63,8 +100,9 @@ export function syncProjectiles(dt: number): void {
   }
 
   for (const [id, entry] of activeProjectileMeshes.entries()) {
-    if (!seenIds.has(id)) {
+    if (!seenProjIds.has(id)) {
       scene.remove(entry.meshGroup);
+      for (const m of entry.materials) m.dispose();
       activeProjectileMeshes.delete(id);
     }
   }
@@ -78,8 +116,6 @@ export function spawnRingBurstVfx(
   endR = 135,
   duration = 0.42
 ): void {
-  const geo = new THREE.RingGeometry(startR, startR + 18, 36);
-  geo.rotateX(-Math.PI / 2);
   const mat = new THREE.MeshBasicMaterial({
     color: colorHex,
     transparent: true,
@@ -88,20 +124,25 @@ export function spawnRingBurstVfx(
     blending: THREE.AdditiveBlending,
     depthWrite: false
   });
-  const mesh = new THREE.Mesh(geo, mat);
+  const mesh = new THREE.Mesh(sharedRingBurstGeo, mat);
   mesh.position.set(x, 6, z);
+  const baseScale = Math.max(1, startR);
+  mesh.scale.setScalar(baseScale);
   scene.add(mesh);
 
-  const scaleRatio = endR / Math.max(1, startR);
+  const scaleRatio = endR / baseScale;
   transientVfx.push({
     mesh,
     age: 0,
     duration,
     update() {
       const t = this.age / this.duration;
-      const s = 1 + (scaleRatio - 1) * (1 - Math.pow(1 - t, 2));
+      const s = baseScale * (1 + (scaleRatio - 1) * (1 - Math.pow(1 - t, 2)));
       this.mesh.scale.setScalar(s);
       mat.opacity = 0.9 * (1 - t);
+    },
+    onDispose() {
+      mat.dispose();
     }
   });
 }
@@ -214,6 +255,9 @@ export function spawnMoveClickIndicator(x: number, z: number): void {
       const s = 1.05 - 0.68 * ease;
       group.scale.setScalar(s);
       mat.opacity = t < 0.45 ? 0.96 : 0.96 * (1 - (t - 0.45) / 0.55);
+    },
+    onDispose() {
+      mat.dispose();
     }
   });
 }
@@ -231,8 +275,6 @@ function createSkybeamMesh(
   const mats: THREE.MeshBasicMaterial[] = [];
   const angles = [0, Math.PI / 3, (2 * Math.PI) / 3];
   for (const ang of angles) {
-    const geo = new THREE.PlaneGeometry(width, height);
-    geo.translate(0, height * 0.5, 0);
     const mat = new THREE.MeshBasicMaterial({
       map: vfxTextures.skybeamGlow || undefined,
       color: colorHex,
@@ -242,7 +284,8 @@ function createSkybeamMesh(
       blending: THREE.AdditiveBlending,
       depthWrite: false
     });
-    const plane = new THREE.Mesh(geo, mat);
+    const plane = new THREE.Mesh(sharedSkybeamGeo, mat);
+    plane.scale.set(width, height, 1);
     plane.rotation.y = ang;
     group.add(plane);
     mats.push(mat);
@@ -286,6 +329,9 @@ function spawnSparkleParticle(
       const pulse = 0.8 + 0.35 * Math.sin(this.age * 28);
       sprite.scale.setScalar(size * (1 - t * 0.55) * pulse);
       mat.opacity = Math.max(0, 1 - Math.pow(t, 1.5));
+    },
+    onDispose() {
+      mat.dispose();
     }
   });
 }
@@ -313,14 +359,15 @@ function spawnFlashBurstAtPoint(x: number, z: number, isDestination: boolean): v
       for (const m of beamMats) {
         m.opacity = 0.95 * Math.pow(1 - t, 1.6);
       }
+    },
+    onDispose() {
+      for (const m of beamMats) m.dispose();
     }
   });
 
   const burstGroup = new THREE.Group();
   burstGroup.position.set(x, 4, z);
 
-  const haloGeo = new THREE.PlaneGeometry(185, 185);
-  haloGeo.rotateX(-Math.PI / 2);
   const haloMat = new THREE.MeshBasicMaterial({
     map: vfxTextures.flashHalo || vfxTextures.flashBurst || undefined,
     color: 0xffb82e,
@@ -329,10 +376,8 @@ function spawnFlashBurstAtPoint(x: number, z: number, isDestination: boolean): v
     blending: THREE.AdditiveBlending,
     depthWrite: false
   });
-  burstGroup.add(new THREE.Mesh(haloGeo, haloMat));
+  burstGroup.add(new THREE.Mesh(sharedFlashHaloGeo, haloMat));
 
-  const starGeo = new THREE.PlaneGeometry(155, 155);
-  starGeo.rotateX(-Math.PI / 2);
   const starMat = new THREE.MeshBasicMaterial({
     map: vfxTextures.flashBurst || undefined,
     color: 0xfff59e,
@@ -341,7 +386,7 @@ function spawnFlashBurstAtPoint(x: number, z: number, isDestination: boolean): v
     blending: THREE.AdditiveBlending,
     depthWrite: false
   });
-  const starMesh = new THREE.Mesh(starGeo, starMat);
+  const starMesh = new THREE.Mesh(sharedFlashStarGeo, starMat);
   starMesh.position.y = 2;
   burstGroup.add(starMesh);
 
@@ -357,6 +402,10 @@ function spawnFlashBurstAtPoint(x: number, z: number, isDestination: boolean): v
       burstGroup.scale.setScalar(s);
       haloMat.opacity = 0.9 * (1 - t);
       starMat.opacity = 0.98 * Math.pow(1 - t, 1.4);
+    },
+    onDispose() {
+      haloMat.dispose();
+      starMat.dispose();
     }
   });
 
@@ -430,8 +479,6 @@ export function spawnHealVfx(slot: number, x: number, z: number): void {
   const healGroup = new THREE.Group();
   healGroup.position.set(x, 5, z);
 
-  const burstGeo1 = new THREE.PlaneGeometry(230, 230);
-  burstGeo1.rotateX(-Math.PI / 2);
   const burstMat1 = new THREE.MeshBasicMaterial({
     map: vfxTextures.flashBurst || undefined,
     color: 0x2eff5e,
@@ -441,12 +488,9 @@ export function spawnHealVfx(slot: number, x: number, z: number): void {
     blending: THREE.AdditiveBlending,
     depthWrite: false
   });
-  const burstMesh1 = new THREE.Mesh(burstGeo1, burstMat1);
+  const burstMesh1 = new THREE.Mesh(sharedHealBurst1Geo, burstMat1);
   healGroup.add(burstMesh1);
 
-  const burstGeo2 = new THREE.PlaneGeometry(210, 210);
-  burstGeo2.rotateX(-Math.PI / 2);
-  burstGeo2.rotateY(Math.PI / 4);
   const burstMat2 = new THREE.MeshBasicMaterial({
     map: vfxTextures.flashBurst || undefined,
     color: 0x7dffaa,
@@ -456,11 +500,10 @@ export function spawnHealVfx(slot: number, x: number, z: number): void {
     blending: THREE.AdditiveBlending,
     depthWrite: false
   });
-  const burstMesh2 = new THREE.Mesh(burstGeo2, burstMat2);
+  const burstMesh2 = new THREE.Mesh(sharedHealBurst2Geo, burstMat2);
   burstMesh2.position.y = 2;
   healGroup.add(burstMesh2);
 
-  const boltGeo = new THREE.CylinderGeometry(88, 64, 95, 28, 1, true);
   const boltMat = new THREE.MeshBasicMaterial({
     map: vfxTextures.healBolts || vfxTextures.healWisps || undefined,
     color: 0x39ff7a,
@@ -470,7 +513,7 @@ export function spawnHealVfx(slot: number, x: number, z: number): void {
     blending: THREE.AdditiveBlending,
     depthWrite: false
   });
-  const boltCylinder = new THREE.Mesh(boltGeo, boltMat);
+  const boltCylinder = new THREE.Mesh(sharedHealBoltGeo, boltMat);
   boltCylinder.position.y = 48;
   healGroup.add(boltCylinder);
 
@@ -493,6 +536,11 @@ export function spawnHealVfx(slot: number, x: number, z: number): void {
       burstMat1.opacity = 0.95 * fade;
       burstMat2.opacity = 0.85 * fade;
       boltMat.opacity = 0.9 * fade;
+    },
+    onDispose() {
+      burstMat1.dispose();
+      burstMat2.dispose();
+      boltMat.dispose();
     }
   });
 
@@ -517,7 +565,6 @@ export function spawnGhostVfx(_slot: number, x: number, z: number): void {
   const group = new THREE.Group();
   group.position.set(x, 65, z);
 
-  const cylGeo = new THREE.CylinderGeometry(82, 54, 125, 24, 1, true);
   const cylMat = new THREE.MeshBasicMaterial({
     map: vfxTextures.hasteShockwave || vfxTextures.ghostTrail || undefined,
     color: 0x22d8ff,
@@ -527,7 +574,7 @@ export function spawnGhostVfx(_slot: number, x: number, z: number): void {
     blending: THREE.AdditiveBlending,
     depthWrite: false
   });
-  const shockMesh = new THREE.Mesh(cylGeo, cylMat);
+  const shockMesh = new THREE.Mesh(sharedGhostCylGeo, cylMat);
   group.add(shockMesh);
 
   scene.add(group);
@@ -541,6 +588,9 @@ export function spawnGhostVfx(_slot: number, x: number, z: number): void {
       shockMesh.rotation.y += dt * 7.5;
       group.scale.set(0.8 + t * 0.75, 1 + t * 0.25, 0.8 + t * 0.75);
       cylMat.opacity = 0.92 * Math.pow(1 - t, 1.3);
+    },
+    onDispose() {
+      cylMat.dispose();
     }
   });
 }
@@ -551,7 +601,6 @@ export function spawnGhostTrailStep(x: number, z: number, facingAngle: number): 
   const sideX = Math.cos(facingAngle);
   const sideZ = -Math.sin(facingAngle);
 
-  const ribbonGeo = new THREE.PlaneGeometry(92, 42);
   const ribbonMat = new THREE.MeshBasicMaterial({
     map: vfxTextures.ghostTrail || vfxTextures.hasteShockwave || undefined,
     color: 0x24c8ff,
@@ -561,7 +610,7 @@ export function spawnGhostTrailStep(x: number, z: number, facingAngle: number): 
     blending: THREE.AdditiveBlending,
     depthWrite: false
   });
-  const ribbon = new THREE.Mesh(ribbonGeo, ribbonMat);
+  const ribbon = new THREE.Mesh(sharedGhostRibbonGeo, ribbonMat);
   const lateralOffset = (Math.random() - 0.5) * 48;
   const heightOffset = 35 + Math.random() * 85;
   ribbon.position.set(
@@ -583,6 +632,9 @@ export function spawnGhostTrailStep(x: number, z: number, facingAngle: number): 
       ribbon.position.z += backZ * 95 * dt;
       ribbon.scale.set(1 + t * 0.45, Math.max(0.2, 1 - t * 0.6), 1);
       ribbonMat.opacity = 0.68 * (1 - t);
+    },
+    onDispose() {
+      ribbonMat.dispose();
     }
   });
 
@@ -617,6 +669,9 @@ export function spawnGhostTrailStep(x: number, z: number, facingAngle: number): 
       orb.position.z += backZ * 70 * dt;
       orb.scale.setScalar(startScale * (1 - t * 0.45));
       orbMat.opacity = 0.72 * Math.pow(1 - t, 1.3);
+    },
+    onDispose() {
+      orbMat.dispose();
     }
   });
 }
@@ -627,6 +682,7 @@ export function updateTransientVfx(dt: number): void {
     vfx.age += dt;
     if (vfx.age >= vfx.duration) {
       scene.remove(vfx.mesh);
+      vfx.onDispose?.();
       transientVfx.splice(i, 1);
     } else {
       vfx.update(dt);

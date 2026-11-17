@@ -3,6 +3,7 @@ import * as THREE from 'three';
 export const LOL_SCALE = 1 / 0.0085; // converts Khada 0.0085 scale back to 1:1 LoL units
 export const PIT_RADIUS = 820;
 export const Q_RANGE = 1050;
+export const Q_SPEED = 2000;
 export const Q_RADIUS = 60;
 export const INV_SQRT2 = Math.SQRT1_2;
 export const SPELL_ICONS = {
