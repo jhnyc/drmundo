@@ -4,12 +4,12 @@ import { mundoRigs } from './champion.js';
 import { camera } from './scene.js';
 import { PIT_RADIUS, SPELL_ICONS, getEl, state } from './state.js';
 const combatTextLayer = getEl('combat-text-layer');
+const _projVec = new THREE.Vector3();
 export function worldToScreen(x, y, z) {
-    const vec = new THREE.Vector3(x, y, z);
-    vec.project(camera);
+    _projVec.set(x, y, z).project(camera);
     return {
-        x: (vec.x * 0.5 + 0.5) * window.innerWidth,
-        y: (-vec.y * 0.5 + 0.5) * window.innerHeight
+        x: (_projVec.x * 0.5 + 0.5) * window.innerWidth,
+        y: (-_projVec.y * 0.5 + 0.5) * window.innerHeight
     };
 }
 export function spawnFloatingCombatText(x, z, text, cssClass = 'magic-dmg') {
@@ -22,59 +22,143 @@ export function spawnFloatingCombatText(x, z, text, cssClass = 'magic-dmg') {
     combatTextLayer.appendChild(el);
     setTimeout(() => el.remove(), 1100);
 }
+let fhbCache = null;
+function getFloatingBarCache() {
+    if (!fhbCache) {
+        fhbCache = [0, 1].map((i) => ({
+            root: getEl(`fhb-${i}`),
+            name: getEl(`fhb-name-${i}`),
+            fill: getEl(`fhb-fill-${i}`),
+            trail: getEl(`fhb-trail-${i}`),
+            visible: false,
+            lastClass: '',
+            lastName: '',
+            lastPct: '',
+            lastX: NaN,
+            lastY: NaN
+        }));
+    }
+    return fhbCache;
+}
 export function updateFloatingHealthBars() {
     const inMatch = state.roomState === 'playing' ||
         state.roomState === 'countdown' ||
         state.roomState === 'round_end';
+    const bars = getFloatingBarCache();
     for (let i = 0; i < 2; i++) {
-        const fhb = getEl(`fhb-${i}`);
+        const bar = bars[i];
         const p = state.serverPlayers[i];
         const rig = mundoRigs[i];
         if (!inMatch || !p || !p.alive) {
-            fhb.style.display = 'none';
+            if (bar.visible) {
+                bar.root.style.display = 'none';
+                bar.visible = false;
+            }
             continue;
         }
-        fhb.style.display = 'block';
-        fhb.className = `lol-floating-bar ${i === state.mySlot ? 'self' : 'enemy'}`;
+        if (!bar.visible) {
+            bar.root.style.display = 'block';
+            bar.visible = true;
+        }
+        const cls = `lol-floating-bar ${i === state.mySlot ? 'self' : 'enemy'}`;
+        if (bar.lastClass !== cls) {
+            bar.root.className = cls;
+            bar.lastClass = cls;
+        }
         const screenPos = worldToScreen(rig.root.position.x, 225, rig.root.position.z);
-        fhb.style.left = `${screenPos.x}px`;
-        fhb.style.top = `${screenPos.y}px`;
-        getEl(`fhb-name-${i}`).textContent = p.name;
-        const pct = Math.max(0, Math.min(100, (p.hp / p.maxHp) * 100));
-        getEl(`fhb-fill-${i}`).style.width = `${pct}%`;
-        getEl(`fhb-trail-${i}`).style.width = `${pct}%`;
+        const sx = Math.round(screenPos.x * 2) / 2;
+        const sy = Math.round(screenPos.y * 2) / 2;
+        if (bar.lastX !== sx || bar.lastY !== sy) {
+            bar.root.style.transform = `translate3d(${sx}px, ${sy}px, 0) translate(-50%, -100%)`;
+            bar.lastX = sx;
+            bar.lastY = sy;
+        }
+        if (bar.lastName !== p.name) {
+            bar.name.textContent = p.name;
+            bar.lastName = p.name;
+        }
+        const pctStr = `${Math.max(0, Math.min(100, (p.hp / p.maxHp) * 100)).toFixed(2)}%`;
+        if (bar.lastPct !== pctStr) {
+            bar.fill.style.width = pctStr;
+            bar.trail.style.width = pctStr;
+            bar.lastPct = pctStr;
+        }
     }
 }
+let hudDom = null;
+const hudPrev = {};
+function setTextIfChanged(key, el, val) {
+    if (hudPrev[key] !== val) {
+        el.textContent = val;
+        hudPrev[key] = val;
+    }
+}
+function getHudDom() {
+    if (!hudDom) {
+        hudDom = {
+            blueName: getEl('hud-blue-name'),
+            blueScore: getEl('hud-blue-score'),
+            dot0: getEl('minimap-dot-0'),
+            redName: getEl('hud-red-name'),
+            redScore: getEl('hud-red-score'),
+            dot1: getEl('minimap-dot-1'),
+            roundLabel: getEl('hud-round-label'),
+            accLabel: getEl('hud-accuracy-label'),
+            statHits: getEl('hud-stat-hits'),
+            statMs: getEl('hud-stat-ms'),
+            hpFill: getEl('hud-hp-bar-fill'),
+            hpText: getEl('hud-hp-bar-text'),
+            hpRegen: getEl('hud-hp-regen'),
+            cdQ: getEl('hud-cd-q'),
+            imgD: getEl('hud-img-d'),
+            imgF: getEl('hud-img-f'),
+            cdD: getEl('hud-cd-d'),
+            cdF: getEl('hud-cd-f')
+        };
+    }
+    return hudDom;
+}
 export function updateInGameHud() {
+    const dom = getHudDom();
     const p0 = state.serverPlayers[0];
     const p1 = state.serverPlayers[1];
     const me = state.serverPlayers[state.mySlot];
     if (p0) {
-        getEl('hud-blue-name').textContent = p0.name;
-        getEl('hud-blue-score').textContent = String(p0.score || 0);
-        const mx = 50 + (p0.x / PIT_RADIUS) * 20;
-        const my = 50 + (p0.z / PIT_RADIUS) * 20;
-        const dot0 = getEl('minimap-dot-0');
-        dot0.style.left = `${mx}%`;
-        dot0.style.top = `${my}%`;
+        setTextIfChanged('bName', dom.blueName, p0.name);
+        setTextIfChanged('bScore', dom.blueScore, String(p0.score || 0));
+        const mx = `${(50 + (p0.x / PIT_RADIUS) * 20).toFixed(2)}%`;
+        const my = `${(50 + (p0.z / PIT_RADIUS) * 20).toFixed(2)}%`;
+        if (hudPrev.d0x !== mx) {
+            dom.dot0.style.left = mx;
+            hudPrev.d0x = mx;
+        }
+        if (hudPrev.d0y !== my) {
+            dom.dot0.style.top = my;
+            hudPrev.d0y = my;
+        }
     }
     if (p1) {
-        getEl('hud-red-name').textContent = p1.name;
-        getEl('hud-red-score').textContent = String(p1.score || 0);
-        const mx = 50 + (p1.x / PIT_RADIUS) * 20;
-        const my = 50 + (p1.z / PIT_RADIUS) * 20;
-        const dot1 = getEl('minimap-dot-1');
-        dot1.style.left = `${mx}%`;
-        dot1.style.top = `${my}%`;
+        setTextIfChanged('rName', dom.redName, p1.name);
+        setTextIfChanged('rScore', dom.redScore, String(p1.score || 0));
+        const mx = `${(50 + (p1.x / PIT_RADIUS) * 20).toFixed(2)}%`;
+        const my = `${(50 + (p1.z / PIT_RADIUS) * 20).toFixed(2)}%`;
+        if (hudPrev.d1x !== mx) {
+            dom.dot1.style.left = mx;
+            hudPrev.d1x = mx;
+        }
+        if (hudPrev.d1y !== my) {
+            dom.dot1.style.top = my;
+            hudPrev.d1y = my;
+        }
     }
-    getEl('hud-round-label').textContent = `ROUND ${state.round} (BO${state.bestOf})`;
+    setTextIfChanged('round', dom.roundLabel, `ROUND ${state.round} (BO${state.bestOf})`);
     if (!me)
         return;
     const thrown = me.stats?.cleaversThrown || 0;
     const hits = me.stats?.cleaversHit || 0;
     const acc = thrown > 0 ? Math.round((hits / thrown) * 100) : 0;
-    getEl('hud-accuracy-label').textContent = `Cleaver Acc: ${acc}% (${hits}/${thrown})`;
-    getEl('hud-stat-hits').textContent = `${hits}`;
+    setTextIfChanged('acc', dom.accLabel, `Cleaver Acc: ${acc}% (${hits}/${thrown})`);
+    setTextIfChanged('hits', dom.statHits, `${hits}`);
     let ms = 385;
     if (me.ghostTimer > 0)
         ms = Math.round(ms * 1.38);
@@ -82,38 +166,58 @@ export function updateInGameHud() {
         ms = Math.round(ms * 1.3);
     if (me.slowTimer > 0)
         ms = Math.round(ms * 0.6);
-    getEl('hud-stat-ms').textContent = `${ms}`;
-    const hpPct = Math.max(0, Math.min(100, (me.hp / me.maxHp) * 100));
-    getEl('hud-hp-bar-fill').style.width = `${hpPct}%`;
-    getEl('hud-hp-bar-text').textContent = `${Math.round(me.hp)} / ${me.maxHp}`;
-    getEl('hud-hp-regen').textContent = '+16.0';
-    const cdQ = getEl('hud-cd-q');
-    if (me.qCd > 0) {
-        cdQ.classList.remove('hidden');
-        cdQ.textContent = me.qCd.toFixed(1);
+    setTextIfChanged('ms', dom.statMs, `${ms}`);
+    const hpPct = `${Math.max(0, Math.min(100, (me.hp / me.maxHp) * 100)).toFixed(2)}%`;
+    if (hudPrev.hpPct !== hpPct) {
+        dom.hpFill.style.width = hpPct;
+        hudPrev.hpPct = hpPct;
     }
-    else {
-        cdQ.classList.add('hidden');
+    setTextIfChanged('hpText', dom.hpText, `${Math.round(me.hp)} / ${me.maxHp}`);
+    setTextIfChanged('hpRegen', dom.hpRegen, '+16.0');
+    if (me.qCd > 0) {
+        if (hudPrev.cdQVis !== '1') {
+            dom.cdQ.classList.remove('hidden');
+            hudPrev.cdQVis = '1';
+        }
+        setTextIfChanged('cdQ', dom.cdQ, me.qCd.toFixed(1));
+    }
+    else if (hudPrev.cdQVis !== '0') {
+        dom.cdQ.classList.add('hidden');
+        hudPrev.cdQVis = '0';
     }
     const spD = me.spells?.[0] || 'flash';
     const spF = me.spells?.[1] || 'ghost';
-    getEl('hud-img-d').src = SPELL_ICONS[spD] || SPELL_ICONS.flash;
-    getEl('hud-img-f').src = SPELL_ICONS[spF] || SPELL_ICONS.ghost;
-    const cdD = getEl('hud-cd-d');
+    const srcD = SPELL_ICONS[spD] || SPELL_ICONS.flash;
+    const srcF = SPELL_ICONS[spF] || SPELL_ICONS.ghost;
+    if (hudPrev.srcD !== srcD) {
+        dom.imgD.src = srcD;
+        hudPrev.srcD = srcD;
+    }
+    if (hudPrev.srcF !== srcF) {
+        dom.imgF.src = srcF;
+        hudPrev.srcF = srcF;
+    }
     if (me.spellCd?.[0] > 0) {
-        cdD.classList.remove('hidden');
-        cdD.textContent = String(Math.ceil(me.spellCd[0]));
+        if (hudPrev.cdDVis !== '1') {
+            dom.cdD.classList.remove('hidden');
+            hudPrev.cdDVis = '1';
+        }
+        setTextIfChanged('cdD', dom.cdD, String(Math.ceil(me.spellCd[0])));
     }
-    else {
-        cdD.classList.add('hidden');
+    else if (hudPrev.cdDVis !== '0') {
+        dom.cdD.classList.add('hidden');
+        hudPrev.cdDVis = '0';
     }
-    const cdF = getEl('hud-cd-f');
     if (me.spellCd?.[1] > 0) {
-        cdF.classList.remove('hidden');
-        cdF.textContent = String(Math.ceil(me.spellCd[1]));
+        if (hudPrev.cdFVis !== '1') {
+            dom.cdF.classList.remove('hidden');
+            hudPrev.cdFVis = '1';
+        }
+        setTextIfChanged('cdF', dom.cdF, String(Math.ceil(me.spellCd[1])));
     }
-    else {
-        cdF.classList.add('hidden');
+    else if (hudPrev.cdFVis !== '0') {
+        dom.cdF.classList.add('hidden');
+        hudPrev.cdFVis = '0';
     }
 }
 let announcerTimeout = null;
