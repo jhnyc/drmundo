@@ -132,7 +132,10 @@ function broadcastToRoom(room: GameRoom, payload: ServerToClientMessage): void {
 // ============================================================================
 let lastLagLogAt = 0;
 
+let tickCounter = 0;
 setInterval(() => {
+  tickCounter = (tickCounter + 1) % 2;
+  const isSnapshotTick = tickCounter === 0;
   const tickStart = performance.now();
   for (const room of rooms.values()) {
     if (room.clients.length === 0) continue;
@@ -171,7 +174,9 @@ setInterval(() => {
       const countdownChanged =
         room.state === 'countdown' && countdownSec !== room.lastBroadcastCountdownSec;
       const shouldBroadcast =
-        room.state === 'playing' || room.events.length > 0 || countdownChanged;
+        (room.state === 'playing' && isSnapshotTick) ||
+        room.events.length > 0 ||
+        countdownChanged;
 
       if (shouldBroadcast) {
         if (room.state === 'countdown') {
