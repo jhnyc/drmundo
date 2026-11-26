@@ -1181,12 +1181,19 @@ async fn run_persistence_loop(state: Arc<AppState>) {
 
 async fn shutdown_signal() {
     let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
+        if tokio::signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
+        }
     };
     #[cfg(unix)]
     let terminate = async {
-        if let Ok(mut sig) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            sig.recv().await;
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                if sig.recv().await.is_none() {
+                    std::future::pending::<()>().await;
+                }
+            }
+            Err(_) => std::future::pending::<()>().await,
         }
     };
     #[cfg(not(unix))]
@@ -1232,10 +1239,12 @@ async fn main() {
 
     let port: u16 = std::env::var("PORT")
         .ok()
-        .and_then(|p| p.parse().ok())
+        .and_then(|p| p.trim().parse().ok())
         .unwrap_or(3000);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    let tcp = TcpListener::bind(addr).await.expect("Failed to bind port");
+    let tcp = TcpListener::bind(addr)
+        .await
+        .unwrap_or_else(|e| panic!("Failed to bind {addr}: {e}"));
     let listener = NoDelayListener(tcp);
 
     let mut props = Map::new();
