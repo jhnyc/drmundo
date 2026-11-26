@@ -3,7 +3,7 @@
 // Preloads & plays official Riot Games .ogg files configured per champion
 // ============================================================================
 
-import { CHAMPION_LIST, getChampionConfig } from '../shared/champions/index.js';
+import { getChampionConfig } from '../shared/champions/index.js';
 import type { ChampionId } from '../shared/types.js';
 
 interface WindowWithWebkitAudio extends Window {
@@ -32,20 +32,29 @@ export class GameAudioEngine {
   public muted = false;
   private bufferCache = new Map<string, AudioBuffer>();
   private loadingPromises = new Map<string, Promise<AudioBuffer | null>>();
-  private activeGhostTimers: ReturnType<typeof setTimeout>[] = [];
+  private activeGhostTimers = new Set<ReturnType<typeof setTimeout>>();
+  private warmedSummoners = false;
+  private warmedChampions = new Set<ChampionId>();
+  private pendingChampionId: ChampionId | null = null;
 
-  constructor() {
-    this.preloadAll();
-  }
+  constructor() {}
 
-  private preloadAll(): void {
-    const allUrls = new Set<string>();
-    for (const list of Object.values(SUMMONER_SOUND_PATHS)) {
-      for (const url of list) {
-        allUrls.add(url);
+  public warmChampionAudio(championId: ChampionId): void {
+    this.pendingChampionId = championId;
+    if (!this.ctx) return;
+
+    if (!this.warmedSummoners) {
+      this.warmedSummoners = true;
+      for (const list of Object.values(SUMMONER_SOUND_PATHS)) {
+        for (const url of list) {
+          void this.getDecodedBuffer(url);
+        }
       }
     }
-    for (const champ of CHAMPION_LIST) {
+
+    if (!this.warmedChampions.has(championId)) {
+      this.warmedChampions.add(championId);
+      const champ = getChampionConfig(championId);
       const lists = [
         champ.audio.chooseVo,
         champ.audio.tauntVo,
@@ -59,12 +68,9 @@ export class GameAudioEngine {
       for (const list of lists) {
         if (!list) continue;
         for (const url of list) {
-          allUrls.add(url);
+          void this.getDecodedBuffer(url);
         }
       }
-    }
-    for (const url of allUrls) {
-      fetch(url).catch(() => {});
     }
   }
 
@@ -78,6 +84,9 @@ export class GameAudioEngine {
     }
     if (this.ctx && this.ctx.state === 'suspended') {
       this.ctx.resume().catch(() => {});
+    }
+    if (this.ctx && this.pendingChampionId) {
+      this.warmChampionAudio(this.pendingChampionId);
     }
     return this.ctx;
   }
@@ -109,30 +118,37 @@ export class GameAudioEngine {
     return promise;
   }
 
+  private playBuffer(
+    ctx: AudioContext,
+    buf: AudioBuffer,
+    volume: number,
+    playbackRate: number
+  ): void {
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = playbackRate;
+    const gain = ctx.createGain();
+    gain.gain.value = volume;
+    src.connect(gain).connect(ctx.destination);
+    src.onended = () => {
+      src.disconnect();
+      gain.disconnect();
+    };
+    src.start(0);
+  }
+
   private playSample(url: string, volume = 0.75, playbackRate = 1.0): void {
     if (this.muted) return;
     const ctx = this.ensureContext();
     if (ctx) {
       const cached = this.bufferCache.get(url);
       if (cached) {
-        const src = ctx.createBufferSource();
-        src.buffer = cached;
-        src.playbackRate.value = playbackRate;
-        const gain = ctx.createGain();
-        gain.gain.value = volume;
-        src.connect(gain).connect(ctx.destination);
-        src.start(0);
+        this.playBuffer(ctx, cached, volume, playbackRate);
         return;
       }
       void this.getDecodedBuffer(url).then((buf) => {
         if (buf && !this.muted) {
-          const src = ctx.createBufferSource();
-          src.buffer = buf;
-          src.playbackRate.value = playbackRate;
-          const gain = ctx.createGain();
-          gain.gain.value = volume;
-          src.connect(gain).connect(ctx.destination);
-          src.start(0);
+          this.playBuffer(ctx, buf, volume, playbackRate);
         } else if (!buf && !this.muted) {
           this.playFallbackHtmlAudio(url, volume);
         }
@@ -173,6 +189,10 @@ export class GameAudioEngine {
     gain.gain.setValueAtTime(peakGain, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + durationSec);
     osc.connect(gain).connect(ctx.destination);
+    osc.onended = () => {
+      osc.disconnect();
+      gain.disconnect();
+    };
     osc.start(now);
     osc.stop(now + durationSec + 0.02);
   }
@@ -250,15 +270,18 @@ export class GameAudioEngine {
     this.playSample(SUMMONER_SOUND_PATHS.ghostStart[0], 0.88);
 
     const loopTimer = setTimeout(() => {
+      this.activeGhostTimers.delete(loopTimer);
       this.playSample(SUMMONER_SOUND_PATHS.ghostLoop[0], 0.65);
     }, 450);
 
     const endDelayMs = Math.max(1500, (durationSec - 1.2) * 1000);
     const endTimer = setTimeout(() => {
+      this.activeGhostTimers.delete(endTimer);
       this.playSample(SUMMONER_SOUND_PATHS.ghostEnd[0], 0.75);
     }, endDelayMs);
 
-    this.activeGhostTimers.push(loopTimer, endTimer);
+    this.activeGhostTimers.add(loopTimer);
+    this.activeGhostTimers.add(endTimer);
   }
 
   public playRecall(): void {
@@ -280,6 +303,10 @@ export class GameAudioEngine {
     gain.gain.setValueAtTime(isFight ? 0.22 : 0.14, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + (isFight ? 0.38 : 0.18));
     osc.connect(gain).connect(ctx.destination);
+    osc.onended = () => {
+      osc.disconnect();
+      gain.disconnect();
+    };
     osc.start(now);
     osc.stop(now + (isFight ? 0.4 : 0.2));
   }

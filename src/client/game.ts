@@ -2,7 +2,12 @@ import * as THREE from 'three';
 import { CHAMPION_LIST, getChampionConfig } from '../shared/champions/index.js';
 import type { ChampionId, CooldownMode } from '../shared/types.js';
 import { audio } from './audio.js';
-import { championRigs, loadProjectileTemplate, loadZoneMeshTemplate } from './champion.js';
+import {
+  RigDisplayTarget,
+  championRigs,
+  loadProjectileTemplate,
+  loadZoneMeshTemplate
+} from './champion.js';
 import {
   bindSpellPickerEvents,
   getDropdownValue,
@@ -23,6 +28,9 @@ import {
   renderer,
   scene,
   updateCameraTransform,
+  updateViewportSize,
+  viewportHeight,
+  viewportWidth,
   voidParticles,
   wardMixers
 } from './scene.js';
@@ -35,7 +43,8 @@ import {
   syncGroundZones,
   syncProjectiles,
   updateSkillshotIndicator,
-  updateTransientVfx
+  updateTransientVfx,
+  updateVfxViewportScale
 } from './vfx.js';
 
 // ============================================================================
@@ -51,6 +60,7 @@ const onChampionSelected = (championId: ChampionId): void => {
     nameInput.value = nextChamp.defaultPlayerName;
   }
 
+  audio.warmChampionAudio(championId);
   audio.playChooseVo(championId);
   void championRigs[0].load(championId);
   void championRigs[1].load(championId);
@@ -77,6 +87,7 @@ initHexDropdowns();
 
 getEl('btn-create-room').addEventListener('click', () => {
   audio.ensureContext();
+  audio.warmChampionAudio(state.myChampionId);
   const defaultName = getChampionConfig(state.myChampionId).defaultPlayerName;
   sendWs({
     type: 'create_room',
@@ -92,6 +103,7 @@ getEl('btn-create-room').addEventListener('click', () => {
 
 getEl('btn-practice-bot').addEventListener('click', () => {
   audio.ensureContext();
+  audio.warmChampionAudio(state.myChampionId);
   const defaultName = getChampionConfig(state.myChampionId).defaultPlayerName;
   sendWs({
     type: 'create_room',
@@ -110,6 +122,7 @@ getEl('btn-practice-bot').addEventListener('click', () => {
 
 getEl('btn-join-room').addEventListener('click', () => {
   audio.ensureContext();
+  audio.warmChampionAudio(state.myChampionId);
   const code = getEl<HTMLInputElement>('input-join-code').value.trim().toUpperCase();
   if (!code) {
     showToast('Please enter a Room Code');
@@ -191,24 +204,35 @@ hudSlotQ.addEventListener('mouseleave', () => {
   state.showSkillshotIndicator = false;
 });
 hudSlotQ.addEventListener('click', () => {
+  flushMouseWorldPosition();
   sendWs({ type: 'cast_q', x: state.mouseWorld.x, z: state.mouseWorld.z });
 });
 getEl('hud-slot-d').addEventListener('click', () => {
+  flushMouseWorldPosition();
   sendWs({ type: 'cast_spell', spellIndex: 0, x: state.mouseWorld.x, z: state.mouseWorld.z });
 });
 getEl('hud-slot-f').addEventListener('click', () => {
+  flushMouseWorldPosition();
   sendWs({ type: 'cast_spell', spellIndex: 1, x: state.mouseWorld.x, z: state.mouseWorld.z });
 });
 
-function updateMouseWorldPosition(clientX: number, clientY: number): void {
-  state.mouseScreen.x = (clientX / window.innerWidth) * 2 - 1;
-  state.mouseScreen.y = -(clientY / window.innerHeight) * 2 + 1;
+let rawMouseX = 0;
+let rawMouseY = 0;
+let mouseDirty = false;
+
+function flushMouseWorldPosition(): void {
+  if (!mouseDirty) return;
+  mouseDirty = false;
+  state.mouseScreen.x = (rawMouseX / viewportWidth) * 2 - 1;
+  state.mouseScreen.y = -(rawMouseY / viewportHeight) * 2 + 1;
   raycaster.setFromCamera(state.mouseScreen, camera);
   raycaster.ray.intersectPlane(groundRayPlane, state.mouseWorld);
 }
 
 window.addEventListener('mousemove', (e: MouseEvent) => {
-  updateMouseWorldPosition(e.clientX, e.clientY);
+  rawMouseX = e.clientX;
+  rawMouseY = e.clientY;
+  mouseDirty = true;
 });
 
 window.addEventListener('contextmenu', (e: MouseEvent) => {
@@ -218,7 +242,10 @@ window.addEventListener('contextmenu', (e: MouseEvent) => {
 renderer.domElement.addEventListener('mousedown', (e: MouseEvent) => {
   audio.ensureContext();
   if (e.button === 2) {
-    updateMouseWorldPosition(e.clientX, e.clientY);
+    rawMouseX = e.clientX;
+    rawMouseY = e.clientY;
+    mouseDirty = true;
+    flushMouseWorldPosition();
     if (state.roomState === 'playing') {
       sendWs({
         type: 'move',
@@ -253,12 +280,14 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.shiftKey) {
       state.showSkillshotIndicator = true;
     }
+    flushMouseWorldPosition();
     sendWs({
       type: 'cast_q',
       x: state.mouseWorld.x,
       z: state.mouseWorld.z
     });
   } else if (key === 'd') {
+    flushMouseWorldPosition();
     sendWs({
       type: 'cast_spell',
       spellIndex: 0,
@@ -266,6 +295,7 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
       z: state.mouseWorld.z
     });
   } else if (key === 'f') {
+    flushMouseWorldPosition();
     sendWs({
       type: 'cast_spell',
       spellIndex: 1,
@@ -304,10 +334,15 @@ window.addEventListener('keyup', (e: KeyboardEvent) => {
 });
 
 window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  updateViewportSize(w, h);
+  camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_RENDER_PIXEL_RATIO));
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  const pr = Math.min(window.devicePixelRatio, MAX_RENDER_PIXEL_RATIO);
+  renderer.setPixelRatio(pr);
+  renderer.setSize(w, h);
+  updateVfxViewportScale(h, pr);
 });
 
 // ============================================================================
@@ -315,6 +350,7 @@ window.addEventListener('resize', () => {
 // ============================================================================
 async function initAllAssets(): Promise<void> {
   try {
+    updateVfxViewportScale(viewportHeight, renderer.getPixelRatio());
     const projectileLoads = CHAMPION_LIST.filter(
       (c) => c.q.archetype === 'linear_projectile' && c.q.projectileVisual.kind === 'obj_model'
     ).map((c) => {
@@ -348,75 +384,138 @@ async function initAllAssets(): Promise<void> {
 void initAllAssets();
 connectWebSocket();
 
+const LOBBY_DUMMY_0: RigDisplayTarget = {
+  championId: state.myChampionId,
+  x: -300,
+  z: -300,
+  angle: Math.PI * 0.25,
+  anim: 'idle',
+  ghostTimer: 0,
+  healSpeedTimer: 0,
+  slowTimer: 0
+};
+
+const LOBBY_DUMMY_1: RigDisplayTarget = {
+  championId: state.myChampionId,
+  x: 300,
+  z: 300,
+  angle: -Math.PI * 0.75,
+  anim: 'idle',
+  ghostTimer: 0,
+  healSpeedTimer: 0,
+  slowTimer: 0
+};
+
+let rafId: number | null = null;
 let lastFrameTime = performance.now();
 let fpsWindowStart = lastFrameTime;
 let fpsFrameCount = 0;
+let lobbyAccumDt = 0;
+let wardAccumDt = 0;
+let wardFrameParity = 0;
+let elapsedSec = 0;
+
 function animate(now: number): void {
-  requestAnimationFrame(animate);
-  const dt = Math.min(0.05, (now - lastFrameTime) / 1000);
+  rafId = requestAnimationFrame(animate);
+  if (document.hidden) return;
+
+  const rawDt = Math.min(0.05, Math.max(0, (now - lastFrameTime) / 1000));
   lastFrameTime = now;
 
-  fpsFrameCount += 1;
-  const fpsElapsed = now - fpsWindowStart;
-  if (fpsElapsed >= 500) {
-    if (fpsElapsed <= 2000) {
-      state.fps = Math.round((fpsFrameCount * 1000) / fpsElapsed);
-      updatePerformanceHud();
+  const isLobby = state.roomState === 'lobby';
+  let dt: number;
+  if (isLobby) {
+    lobbyAccumDt += rawDt;
+    if (lobbyAccumDt < 0.032) {
+      return;
     }
-    fpsFrameCount = 0;
-    fpsWindowStart = now;
+    dt = Math.min(0.05, lobbyAccumDt);
+    lobbyAccumDt = 0;
+  } else {
+    lobbyAccumDt = 0;
+    dt = rawDt;
   }
 
-  for (const m of wardMixers) {
-    m.update(dt);
+  elapsedSec += dt;
+
+  if (!isLobby) {
+    fpsFrameCount += 1;
+    const fpsElapsed = now - fpsWindowStart;
+    if (fpsElapsed >= 500) {
+      if (fpsElapsed <= 2000) {
+        state.fps = Math.round((fpsFrameCount * 1000) / fpsElapsed);
+        updatePerformanceHud();
+      }
+      fpsFrameCount = 0;
+      fpsWindowStart = now;
+    }
+  }
+
+  wardAccumDt += dt;
+  wardFrameParity = (wardFrameParity + 1) & 1;
+  if (isLobby || wardFrameParity === 0) {
+    for (const m of wardMixers) {
+      m.update(wardAccumDt);
+    }
+    wardAccumDt = 0;
   }
 
   if (voidParticles) {
     voidParticles.rotation.y += dt * 0.04;
-    voidParticles.position.y = Math.sin(now * 0.0008) * 14;
+    voidParticles.position.y = Math.sin(elapsedSec * 0.8) * 14;
   }
 
-  if (state.roomState === 'lobby' && !state.serverPlayers[0] && !state.serverPlayers[1]) {
-    championRigs[0].update(
-      dt,
-      {
-        championId: state.myChampionId,
-        x: -300,
-        z: -300,
-        angle: Math.PI * 0.25,
-        anim: 'idle',
-        ghostTimer: 0,
-        healSpeedTimer: 0,
-        slowTimer: 0
-      },
-      spawnGhostTrailStep
-    );
-    championRigs[1].update(
-      dt,
-      {
-        championId: state.myChampionId,
-        x: 300,
-        z: 300,
-        angle: -Math.PI * 0.75,
-        anim: 'idle',
-        ghostTimer: 0,
-        healSpeedTimer: 0,
-        slowTimer: 0
-      },
-      spawnGhostTrailStep
-    );
+  if (isLobby && !state.serverPlayers[0] && !state.serverPlayers[1]) {
+    LOBBY_DUMMY_0.championId = state.myChampionId;
+    LOBBY_DUMMY_1.championId = state.myChampionId;
+    championRigs[0].update(dt, LOBBY_DUMMY_0, spawnGhostTrailStep, elapsedSec);
+    championRigs[1].update(dt, LOBBY_DUMMY_1, spawnGhostTrailStep, elapsedSec);
   } else {
-    championRigs[0].update(dt, state.serverPlayers[0], spawnGhostTrailStep);
-    championRigs[1].update(dt, state.serverPlayers[1], spawnGhostTrailStep);
+    championRigs[0].update(dt, state.serverPlayers[0], spawnGhostTrailStep, elapsedSec);
+    championRigs[1].update(dt, state.serverPlayers[1], spawnGhostTrailStep, elapsedSec);
   }
 
-  syncProjectiles(dt);
-  syncGroundZones(dt);
-  updateTransientVfx(dt);
-  updateSkillshotIndicator();
-  updateCameraTransform(dt);
-  updateFloatingHealthBars();
+  if (!isLobby) {
+    if (mouseDirty && state.roomState === 'playing') {
+      flushMouseWorldPosition();
+    }
+    syncProjectiles(dt);
+    syncGroundZones(dt);
+    updateTransientVfx(dt);
+    updateSkillshotIndicator();
+    updateCameraTransform(dt);
+    updateFloatingHealthBars();
+  } else {
+    updateCameraTransform(dt);
+  }
 
   renderer.render(scene, camera);
 }
-requestAnimationFrame(animate);
+
+function startRenderLoop(): void {
+  if (rafId !== null) return;
+  lastFrameTime = performance.now();
+  fpsWindowStart = lastFrameTime;
+  fpsFrameCount = 0;
+  lobbyAccumDt = 0.033;
+  rafId = requestAnimationFrame(animate);
+}
+
+function stopRenderLoop(): void {
+  if (rafId !== null) {
+    cancelAnimationFrame(rafId);
+    rafId = null;
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    stopRenderLoop();
+  } else {
+    startRenderLoop();
+  }
+});
+
+if (!document.hidden) {
+  startRenderLoop();
+}

@@ -228,8 +228,9 @@ function stepPlayers(room: GameRoom, dt: number): void {
 
     const dx = p.targetX - p.x;
     const dz = p.targetZ - p.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist > 4) {
+    const distSq = dx * dx + dz * dz;
+    if (distSq > 16) {
+      const dist = Math.sqrt(distSq);
       let speed = champ.stats.baseMoveSpeed;
       if (p.ghostTimer > 0) speed *= 1 + SUMMONER_SPELLS.ghost.speedBoost;
       if (p.healSpeedTimer > 0) speed *= 1 + SUMMONER_SPELLS.heal.speedBoost;
@@ -261,8 +262,10 @@ function stepProjectiles(room: GameRoom, dt: number, onGameOver?: (room: GameRoo
 
     if (target && target.alive) {
       const targetChamp = getChampionConfig(target.championId);
-      const hitDist = Math.hypot(target.x - proj.x, target.z - proj.z);
-      if (hitDist <= targetChamp.stats.hitboxRadius + proj.radius) {
+      const hitDx = target.x - proj.x;
+      const hitDz = target.z - proj.z;
+      const hitRadius = targetChamp.stats.hitboxRadius + proj.radius;
+      if (hitDx * hitDx + hitDz * hitDz <= hitRadius * hitRadius) {
         room.projectiles.splice(i, 1);
         applyHitAndCheckRoundEnd(
           room,
@@ -283,9 +286,14 @@ function stepProjectiles(room: GameRoom, dt: number, onGameOver?: (room: GameRoo
       }
     }
 
-    const traveled = Math.hypot(proj.x - proj.startX, proj.z - proj.startZ);
-    const distFromCenter = Math.hypot(proj.x, proj.z);
-    if (traveled >= proj.maxRange || distFromCenter >= PIT_RADIUS + 65) {
+    const travDx = proj.x - proj.startX;
+    const travDz = proj.z - proj.startZ;
+    const distCenterSq = proj.x * proj.x + proj.z * proj.z;
+    const maxEdge = PIT_RADIUS + 65;
+    if (
+      travDx * travDx + travDz * travDz >= proj.maxRange * proj.maxRange ||
+      distCenterSq >= maxEdge * maxEdge
+    ) {
       room.events.push({
         type: 'q_miss',
         projId: proj.id,
@@ -312,8 +320,10 @@ function stepGroundZones(room: GameRoom, dt: number, onGameOver?: (room: GameRoo
     let hitVictim = false;
     if (target && target.alive) {
       const targetChamp = getChampionConfig(target.championId);
-      const dist = Math.hypot(target.x - zone.x, target.z - zone.z);
-      hitVictim = dist <= targetChamp.stats.hitboxRadius + zone.radius;
+      const hitDx = target.x - zone.x;
+      const hitDz = target.z - zone.z;
+      const hitRadius = targetChamp.stats.hitboxRadius + zone.radius;
+      hitVictim = hitDx * hitDx + hitDz * hitDz <= hitRadius * hitRadius;
     }
 
     room.events.push({

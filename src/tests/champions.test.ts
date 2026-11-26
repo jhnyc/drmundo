@@ -11,7 +11,10 @@ import {
   normalizeChampionId
 } from '../shared/champions/index.js';
 import {
+  LINE_BUFFER,
+  PIT_RADIUS,
   SUMMONER_SPELLS,
+  TICK_RATE,
   getSpellCooldown,
   parseBestOf,
   validateSpells
@@ -100,4 +103,53 @@ test('shared summoner spell & room helpers behave consistently', () => {
   assert.equal(getSpellCooldown('flash', false), SUMMONER_SPELLS.flash.cooldownStandard);
   assert.equal(parseBestOf(5), 5);
   assert.equal(parseBestOf(99), 3);
+});
+
+test('exported shared/gameplay-config.json matches TypeScript constants and champion registry', () => {
+  const cfgPath = path.join(PROJECT_ROOT, 'shared', 'gameplay-config.json');
+  assert.ok(fs.existsSync(cfgPath), 'shared/gameplay-config.json must exist after build');
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+
+  assert.equal(cfg.tickRate, TICK_RATE);
+  assert.equal(cfg.pitRadius, PIT_RADIUS);
+  assert.equal(cfg.lineBuffer, LINE_BUFFER);
+  assert.equal(cfg.defaultChampionId, DEFAULT_CHAMPION_ID);
+
+  for (const [id, spell] of Object.entries(SUMMONER_SPELLS)) {
+    const exported = cfg.summonerSpells[id];
+    assert.ok(exported, `missing summoner spell ${id}`);
+    assert.equal(exported.id, spell.id);
+    assert.equal(exported.cooldownFast, spell.cooldownFast);
+    assert.equal(exported.cooldownStandard, spell.cooldownStandard);
+    if ('range' in spell) assert.equal(exported.range, spell.range);
+    if ('healAmount' in spell) assert.equal(exported.healAmount, spell.healAmount);
+    if ('speedBoost' in spell) assert.equal(exported.speedBoost, spell.speedBoost);
+    if ('duration' in spell) assert.equal(exported.duration, spell.duration);
+  }
+
+  for (const [id, champ] of Object.entries(CHAMPION_REGISTRY)) {
+    const exported = cfg.champions[id];
+    assert.ok(exported, `missing champion ${id}`);
+    assert.equal(exported.id, champ.id);
+    assert.equal(exported.name, champ.name);
+    assert.equal(exported.defaultPlayerName, champ.defaultPlayerName);
+    assert.equal(exported.defaultBotName, champ.defaultBotName);
+    assert.deepEqual(exported.stats, champ.stats);
+    assert.equal(exported.q.archetype, champ.q.archetype);
+    assert.equal(exported.q.hpCost, champ.q.hpCost);
+    assert.equal(exported.q.refundOnHit, champ.q.refundOnHit);
+    assert.equal(exported.q.cooldown, champ.q.cooldown);
+    assert.equal(exported.q.castTime, champ.q.castTime);
+    assert.equal(exported.q.range, champ.q.range);
+    assert.equal(exported.q.radius, champ.q.radius);
+    assert.deepEqual(exported.q.damage, champ.q.damage);
+    assert.deepEqual(exported.q.slow, champ.q.slow);
+    if (champ.q.archetype === 'linear_projectile') {
+      assert.equal(exported.q.speed, champ.q.speed);
+      assert.equal(exported.q.spawnOffset, champ.q.spawnOffset);
+    } else {
+      assert.equal(exported.q.delay, champ.q.delay);
+      assert.equal(exported.q.knockupDuration, champ.q.knockupDuration);
+    }
+  }
 });

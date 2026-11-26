@@ -3,26 +3,49 @@ import { CHAMPION_LIST, getChampionConfig, normalizeChampionId } from '../shared
 import { SUMMONER_SPELLS } from '../shared/constants.js';
 import { audio } from './audio.js';
 import { championRigs } from './champion.js';
-import { camera } from './scene.js';
+import { camera, viewportHeight, viewportWidth } from './scene.js';
 import { PIT_RADIUS, SPELL_ICONS, getEl, state } from './state.js';
 const combatTextLayer = getEl('combat-text-layer');
 const _projVec = new THREE.Vector3();
+const _screenPos = { x: 0, y: 0 };
 export function worldToScreen(x, y, z) {
     _projVec.set(x, y, z).project(camera);
-    return {
-        x: (_projVec.x * 0.5 + 0.5) * window.innerWidth,
-        y: (-_projVec.y * 0.5 + 0.5) * window.innerHeight
-    };
+    _screenPos.x = (_projVec.x * 0.5 + 0.5) * viewportWidth;
+    _screenPos.y = (-_projVec.y * 0.5 + 0.5) * viewportHeight;
+    return _screenPos;
+}
+const COMBAT_TEXT_POOL_SIZE = 12;
+let combatTextPool = null;
+let combatTextCursor = 0;
+function ensureCombatTextPool() {
+    if (!combatTextPool) {
+        combatTextPool = [];
+        for (let i = 0; i < COMBAT_TEXT_POOL_SIZE; i++) {
+            const el = document.createElement('div');
+            el.className = 'floating-combat-text';
+            el.style.display = 'none';
+            el.addEventListener('animationend', () => {
+                el.style.display = 'none';
+            });
+            combatTextLayer.appendChild(el);
+            combatTextPool.push({ el, alt: false });
+        }
+    }
+    return combatTextPool;
 }
 export function spawnFloatingCombatText(x, z, text, cssClass = 'magic-dmg', worldY = 195) {
+    const pool = ensureCombatTextPool();
+    const entry = pool[combatTextCursor];
+    combatTextCursor = (combatTextCursor + 1) % COMBAT_TEXT_POOL_SIZE;
+    entry.alt = !entry.alt;
     const pos = worldToScreen(x, worldY, z);
-    const el = document.createElement('div');
+    const el = entry.el;
     el.className = `floating-combat-text ${cssClass}`;
     el.textContent = text;
-    el.style.left = `${pos.x}px`;
-    el.style.top = `${pos.y}px`;
-    combatTextLayer.appendChild(el);
-    setTimeout(() => el.remove(), 1100);
+    el.style.left = `${Math.round(pos.x)}px`;
+    el.style.top = `${Math.round(pos.y)}px`;
+    el.style.animationName = entry.alt ? 'floatUpFadeAlt' : 'floatUpFade';
+    el.style.display = 'block';
 }
 let fhbCache = null;
 function getFloatingBarCache() {
@@ -93,11 +116,12 @@ export function updateFloatingHealthBars() {
             bar.name.textContent = p.name;
             bar.lastName = p.name;
         }
-        const pctStr = `${Math.max(0, Math.min(100, (p.hp / p.maxHp) * 100)).toFixed(2)}%`;
-        if (bar.lastPct !== pctStr) {
-            bar.fill.style.width = pctStr;
-            bar.trail.style.width = pctStr;
-            bar.lastPct = pctStr;
+        const hpRatio = Math.max(0, Math.min(1, p.hp / p.maxHp)).toFixed(4);
+        if (bar.lastPct !== hpRatio) {
+            const scaleTransform = `scaleX(${hpRatio})`;
+            bar.fill.style.transform = scaleTransform;
+            bar.trail.style.transform = scaleTransform;
+            bar.lastPct = hpRatio;
         }
     }
 }
@@ -194,15 +218,12 @@ export function updateInGameHud() {
             dom.dot0.style.backgroundImage = dot0Img;
             hudPrev.d0img = dot0Img;
         }
-        const mx = `${(50 + (p0.x / PIT_RADIUS) * 20).toFixed(2)}%`;
-        const my = `${(50 + (p0.z / PIT_RADIUS) * 20).toFixed(2)}%`;
-        if (hudPrev.d0x !== mx) {
-            dom.dot0.style.left = mx;
-            hudPrev.d0x = mx;
-        }
-        if (hudPrev.d0y !== my) {
-            dom.dot0.style.top = my;
-            hudPrev.d0y = my;
+        const mx = Math.round((50 + (p0.x / PIT_RADIUS) * 20) * 1.6 * 2) / 2;
+        const my = Math.round((50 + (p0.z / PIT_RADIUS) * 20) * 1.6 * 2) / 2;
+        const dot0Transform = `translate3d(${mx}px, ${my}px, 0) translate(-50%, -50%)`;
+        if (hudPrev.d0pos !== dot0Transform) {
+            dom.dot0.style.transform = dot0Transform;
+            hudPrev.d0pos = dot0Transform;
         }
     }
     if (p1) {
@@ -214,15 +235,12 @@ export function updateInGameHud() {
             dom.dot1.style.backgroundImage = dot1Img;
             hudPrev.d1img = dot1Img;
         }
-        const mx = `${(50 + (p1.x / PIT_RADIUS) * 20).toFixed(2)}%`;
-        const my = `${(50 + (p1.z / PIT_RADIUS) * 20).toFixed(2)}%`;
-        if (hudPrev.d1x !== mx) {
-            dom.dot1.style.left = mx;
-            hudPrev.d1x = mx;
-        }
-        if (hudPrev.d1y !== my) {
-            dom.dot1.style.top = my;
-            hudPrev.d1y = my;
+        const mx = Math.round((50 + (p1.x / PIT_RADIUS) * 20) * 1.6 * 2) / 2;
+        const my = Math.round((50 + (p1.z / PIT_RADIUS) * 20) * 1.6 * 2) / 2;
+        const dot1Transform = `translate3d(${mx}px, ${my}px, 0) translate(-50%, -50%)`;
+        if (hudPrev.d1pos !== dot1Transform) {
+            dom.dot1.style.transform = dot1Transform;
+            hudPrev.d1pos = dot1Transform;
         }
     }
     setTextIfChanged('round', dom.roundLabel, `ROUND ${state.round} (BO${state.bestOf})`);
@@ -243,10 +261,10 @@ export function updateInGameHud() {
     if (me.slowTimer > 0)
         ms = Math.round(ms * (1 - (me.slowPercent || 0.4)));
     setTextIfChanged('ms', dom.statMs, `${ms}`);
-    const hpPct = `${Math.max(0, Math.min(100, (me.hp / me.maxHp) * 100)).toFixed(2)}%`;
-    if (hudPrev.hpPct !== hpPct) {
-        dom.hpFill.style.width = hpPct;
-        hudPrev.hpPct = hpPct;
+    const hpRatio = Math.max(0, Math.min(1, me.hp / me.maxHp)).toFixed(4);
+    if (hudPrev.hpPct !== hpRatio) {
+        dom.hpFill.style.transform = `scaleX(${hpRatio})`;
+        hudPrev.hpPct = hpRatio;
     }
     setTextIfChanged('hpText', dom.hpText, `${Math.round(me.hp)} / ${me.maxHp}`);
     if (me.qCd > 0) {

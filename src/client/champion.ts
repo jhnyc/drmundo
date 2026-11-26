@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { DEFAULT_CHAMPION_ID, getChampionConfig } from '../shared/champions/index.js';
 import type {
   ChampionConfig,
@@ -6,9 +7,120 @@ import type {
   ProjectileVisualConfig
 } from '../shared/champions/types.js';
 import type { AnimKey, ChampionId } from '../shared/types.js';
-import { gltfLoader, objLoader, scene, textureLoader } from './scene.js';
+import {
+  ensureKtx2Loader,
+  gltfLoader,
+  objLoader,
+  scene,
+  scheduleKtx2Dispose,
+  textureLoader
+} from './scene.js';
 
 const _pelvisWorld = new THREE.Vector3();
+
+const sharedShadowGeo = new THREE.CircleGeometry(52, 24);
+sharedShadowGeo.rotateX(-Math.PI / 2);
+const sharedShadowMat = new THREE.MeshBasicMaterial({
+  color: 0x000000,
+  transparent: true,
+  opacity: 0.42,
+  depthWrite: false
+});
+
+interface CachedChampionGltf {
+  scene: THREE.Group;
+  animations: THREE.AnimationClip[];
+}
+
+const gltfTemplateCache = new Map<ChampionId, CachedChampionGltf>();
+const gltfLoadingPromises = new Map<ChampionId, Promise<CachedChampionGltf>>();
+
+function collectMaterialTextures(mat: THREE.Material, out: Set<THREE.Texture>): void {
+  const rec = mat as unknown as Record<string, unknown>;
+  for (const key of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap']) {
+    const val = rec[key];
+    if (val && (val as THREE.Texture).isTexture) {
+      out.add(val as THREE.Texture);
+    }
+  }
+}
+
+async function loadChampionGltfTemplate(championId: ChampionId): Promise<CachedChampionGltf> {
+  const cached = gltfTemplateCache.get(championId);
+  if (cached) return cached;
+
+  const inflight = gltfLoadingPromises.get(championId);
+  if (inflight) return inflight;
+
+  const config = getChampionConfig(championId);
+  const promise = (async (): Promise<CachedChampionGltf> => {
+    ensureKtx2Loader();
+    try {
+      const gltf = await gltfLoader.loadAsync(config.model.url);
+
+      // Prune unreferenced animation clips so mixer caches and memory stay lean
+      const wantedClipNames = new Set<string>();
+      for (const clipCfg of Object.values(config.model.clips)) {
+        if (clipCfg.clipName) wantedClipNames.add(clipCfg.clipName);
+        if (clipCfg.fallbackClipName) wantedClipNames.add(clipCfg.fallbackClipName);
+      }
+      let prunedAnimations = gltf.animations.filter((clip) => wantedClipNames.has(clip.name));
+      if (prunedAnimations.length === 0 && gltf.animations.length > 0) {
+        prunedAnimations = [gltf.animations[0]];
+      }
+
+      // Prune permanently invisible meshes and their orphaned GPU textures
+      const hiddenMeshes: THREE.Mesh[] = [];
+      const keptTextures = new Set<THREE.Texture>();
+      gltf.scene.traverse((child: THREE.Object3D) => {
+        if (!(child as THREE.Mesh).isMesh) return;
+        const mesh = child as THREE.Mesh;
+        const mat = mesh.material;
+        if (mat && !Array.isArray(mat)) {
+          const ud = (mat.userData || {}) as { visible?: boolean };
+          if (ud.visible === false) {
+            hiddenMeshes.push(mesh);
+            return;
+          }
+          collectMaterialTextures(mat, keptTextures);
+        } else if (Array.isArray(mat)) {
+          for (const m of mat) {
+            collectMaterialTextures(m, keptTextures);
+          }
+        }
+      });
+
+      const orphanTextures = new Set<THREE.Texture>();
+      for (const mesh of hiddenMeshes) {
+        mesh.parent?.remove(mesh);
+        mesh.geometry?.dispose();
+        const mat = mesh.material;
+        if (mat && !Array.isArray(mat)) {
+          collectMaterialTextures(mat, orphanTextures);
+          mat.dispose();
+        }
+      }
+      for (const tex of orphanTextures) {
+        if (!keptTextures.has(tex)) {
+          tex.dispose();
+        }
+      }
+
+      const entry: CachedChampionGltf = {
+        scene: gltf.scene,
+        animations: prunedAnimations
+      };
+      gltfTemplateCache.set(championId, entry);
+      return entry;
+    } finally {
+      scheduleKtx2Dispose();
+      gltfLoadingPromises.delete(championId);
+    }
+  })();
+
+  gltfLoadingPromises.set(championId, promise);
+  return promise;
+}
 
 export interface RigDisplayTarget {
   championId?: ChampionId;
@@ -55,15 +167,7 @@ export class ChampionRig {
     this.root = new THREE.Group();
     scene.add(this.root);
 
-    const shadowGeo = new THREE.CircleGeometry(52, 32);
-    shadowGeo.rotateX(-Math.PI / 2);
-    const shadowMat = new THREE.MeshBasicMaterial({
-      color: 0x000000,
-      transparent: true,
-      opacity: 0.42,
-      depthWrite: false
-    });
-    this.shadowDisc = new THREE.Mesh(shadowGeo, shadowMat);
+    this.shadowDisc = new THREE.Mesh(sharedShadowGeo, sharedShadowMat);
     this.shadowDisc.position.y = 1.5;
     this.root.add(this.shadowDisc);
 
@@ -79,6 +183,9 @@ export class ChampionRig {
   private clearCurrentModel(): void {
     if (this.mixer) {
       this.mixer.stopAllAction();
+      if (this.model) {
+        this.mixer.uncacheRoot(this.model);
+      }
       this.mixer = null;
     }
     this.clips.clear();
@@ -86,6 +193,9 @@ export class ChampionRig {
     this.currentAnimKey = '';
     this.pelvisNode = null;
     this.castHiddenMesh = null;
+    for (const mat of this.bodyMaterials) {
+      mat.dispose();
+    }
     this.bodyMaterials = [];
     this.lastTintHex = -1;
     this.lastEmissiveInt = -1;
@@ -107,12 +217,12 @@ export class ChampionRig {
     const shadowScale = Math.max(0.8, this.config.stats.hitboxRadius / 65);
     this.shadowDisc.scale.setScalar(shadowScale);
 
-    const gltf = await gltfLoader.loadAsync(modelCfg.url);
+    const template = await loadChampionGltfTemplate(championId);
     if (token !== this.loadToken) return;
 
     this.clearCurrentModel();
 
-    this.model = gltf.scene;
+    this.model = cloneSkinned(template.scene) as THREE.Group;
     this.model.scale.setScalar(modelCfg.scale);
     this.model.position.set(0, 0, 0);
 
@@ -137,12 +247,8 @@ export class ChampionRig {
           mat.forceSinglePass = true;
           mesh.material = mat;
           const ud = (mat.userData || {}) as { visible?: boolean; hash?: number };
-          if (ud.visible === false) {
-            mesh.visible = false;
-          } else {
-            mesh.visible = true;
-            this.bodyMaterials.push(mat);
-          }
+          mesh.visible = true;
+          this.bodyMaterials.push(mat);
           if (
             hideCfg &&
             (mat.name === hideCfg.materialName ||
@@ -157,7 +263,7 @@ export class ChampionRig {
     this.root.add(this.model);
 
     this.mixer = new THREE.AnimationMixer(this.model);
-    for (const clip of gltf.animations) {
+    for (const clip of template.animations) {
       this.clips.set(clip.name, clip);
     }
 
@@ -216,7 +322,8 @@ export class ChampionRig {
   public update(
     dt: number,
     serverPlayer: RigDisplayTarget | null,
-    onGhostTrailStep?: (x: number, z: number, facingAngle: number) => void
+    onGhostTrailStep?: (x: number, z: number, facingAngle: number) => void,
+    nowSec = 0
   ): void {
     if (serverPlayer?.championId && serverPlayer.championId !== this.championId) {
       void this.load(serverPlayer.championId);
@@ -306,7 +413,7 @@ export class ChampionRig {
     } else if (serverPlayer.ghostTimer > 0) {
       emissiveHex = 0x16a8ff;
       colorHex = 0xd4f0ff;
-      emissiveInt = 0.52 + Math.sin(performance.now() * 0.014) * 0.14;
+      emissiveInt = 0.52 + Math.sin(nowSec * 14) * 0.14;
       bodyOpacity = 0.86;
     } else if (serverPlayer.slowTimer > 0) {
       emissiveHex = 0x5c2d91;

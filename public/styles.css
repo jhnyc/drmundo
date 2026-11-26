@@ -159,8 +159,11 @@ button, input, select, .clickable {
   top: 0;
   left: 0;
   bottom: 0;
+  width: 100%;
+  transform-origin: left center;
+  will-change: transform;
   background: #f5c542;
-  transition: width 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .fhb-hp-fill {
@@ -168,7 +171,10 @@ button, input, select, .clickable {
   top: 0;
   left: 0;
   bottom: 0;
-  transition: width 0.06s linear;
+  width: 100%;
+  transform-origin: left center;
+  will-change: transform;
+  transition: transform 0.06s linear;
 }
 
 .lol-floating-bar.self .fhb-hp-fill {
@@ -263,6 +269,21 @@ button, input, select, .clickable {
   }
 }
 
+@keyframes floatUpFadeAlt {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -20%) scale(0.75);
+  }
+  20% {
+    opacity: 1;
+    transform: translate(-50%, -65%) scale(1.12);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -165%) scale(0.95);
+  }
+}
+
 /* ============================================================================
    HEXTECH CLIENT OVERLAY & ROOM LOBBY UI
    ============================================================================ */
@@ -274,8 +295,7 @@ button, input, select, .clickable {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: radial-gradient(circle at 50% 40%, rgba(4, 15, 28, 0.45) 0%, rgba(1, 10, 19, 0.84) 85%);
-  backdrop-filter: blur(3px);
+  background: radial-gradient(circle at 50% 40%, rgba(4, 15, 28, 0.58) 0%, rgba(1, 10, 19, 0.90) 85%);
   padding: 20px;
   overflow-y: auto;
 }
@@ -1388,7 +1408,9 @@ button, input, select, .clickable {
   bottom: 0;
   background: linear-gradient(180deg, #2ee65f 0%, #139e38 55%, #0a6121 100%);
   width: 100%;
-  transition: width 0.08s linear;
+  transform-origin: left center;
+  will-change: transform;
+  transition: transform 0.08s linear;
 }
 
 .hud-res-fill {
@@ -1451,10 +1473,13 @@ button, input, select, .clickable {
 
 .minimap-dot {
   position: absolute;
+  left: 0;
+  top: 0;
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  transform: translate(-50%, -50%);
+  transform: translate3d(80px, 80px, 0) translate(-50%, -50%);
+  will-change: transform;
   border: 2px solid #fff;
   background-color: #0b1622;
   background-size: cover;
@@ -1537,8 +1562,7 @@ button, input, select, .clickable {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(1, 10, 19, 0.78);
-  backdrop-filter: blur(4px);
+  background: rgba(1, 10, 19, 0.84);
 }
 
 #gameover-modal.hidden {

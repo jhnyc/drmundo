@@ -1,0 +1,10 @@
+.git
+.DS_Store
+*.log
+node_modules
+dist
+dist-test
+data
+server-rs/target
+screenshot.png
+docs

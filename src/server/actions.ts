@@ -191,7 +191,7 @@ export function castPrimaryAbility(
   const q = champ.q;
   const dx = rawTargetX - player.x;
   const dz = rawTargetZ - player.z;
-  const len = Math.hypot(dx, dz);
+  const len = Math.sqrt(dx * dx + dz * dz);
   const dirX = len > 1e-3 ? dx / len : Math.sin(player.angle);
   const dirZ = len > 1e-3 ? dz / len : Math.cos(player.angle);
 
@@ -258,7 +258,7 @@ export function useSummonerSpell(
     const oldZ = player.z;
     const dx = targetX - player.x;
     const dz = targetZ - player.z;
-    const dist = Math.hypot(dx, dz);
+    const dist = Math.sqrt(dx * dx + dz * dz);
     const actualDist = Math.min(dist, flashDef.range);
     const dirX = dist > 1e-3 ? dx / dist : Math.sin(player.angle);
     const dirZ = dist > 1e-3 ? dz / dist : Math.cos(player.angle);

@@ -132,6 +132,7 @@ function updateLobbyDOM(lobby: RoomLobbyPayload): void {
   state.bestOf = lobby.settings?.bestOf || 3;
   state.botEnabled = lobby.botEnabled;
   state.myChampionId = lobby.championId;
+  audio.warmChampionAudio(lobby.championId);
 
   const matchChamp = getChampionConfig(lobby.championId);
   const brandAvatar = document.getElementById('brand-avatar-img') as HTMLImageElement | null;

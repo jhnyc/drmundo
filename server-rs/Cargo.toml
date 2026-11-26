@@ -1,0 +1,18 @@
+[package]
+name = "baron-pit-server"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws", "http1", "tokio"] }
+tokio = { version = "1", features = ["rt", "macros", "net", "sync", "time", "signal", "fs", "process"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+flate2 = "1"
+fastrand = "2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

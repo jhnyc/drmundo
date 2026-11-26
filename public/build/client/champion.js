@@ -1,7 +1,103 @@
 import * as THREE from 'three';
+import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { DEFAULT_CHAMPION_ID, getChampionConfig } from '../shared/champions/index.js';
-import { gltfLoader, objLoader, scene, textureLoader } from './scene.js';
+import { ensureKtx2Loader, gltfLoader, objLoader, scene, scheduleKtx2Dispose, textureLoader } from './scene.js';
 const _pelvisWorld = new THREE.Vector3();
+const sharedShadowGeo = new THREE.CircleGeometry(52, 24);
+sharedShadowGeo.rotateX(-Math.PI / 2);
+const sharedShadowMat = new THREE.MeshBasicMaterial({
+    color: 0x000000,
+    transparent: true,
+    opacity: 0.42,
+    depthWrite: false
+});
+const gltfTemplateCache = new Map();
+const gltfLoadingPromises = new Map();
+function collectMaterialTextures(mat, out) {
+    const rec = mat;
+    for (const key of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap']) {
+        const val = rec[key];
+        if (val && val.isTexture) {
+            out.add(val);
+        }
+    }
+}
+async function loadChampionGltfTemplate(championId) {
+    const cached = gltfTemplateCache.get(championId);
+    if (cached)
+        return cached;
+    const inflight = gltfLoadingPromises.get(championId);
+    if (inflight)
+        return inflight;
+    const config = getChampionConfig(championId);
+    const promise = (async () => {
+        ensureKtx2Loader();
+        try {
+            const gltf = await gltfLoader.loadAsync(config.model.url);
+            // Prune unreferenced animation clips so mixer caches and memory stay lean
+            const wantedClipNames = new Set();
+            for (const clipCfg of Object.values(config.model.clips)) {
+                if (clipCfg.clipName)
+                    wantedClipNames.add(clipCfg.clipName);
+                if (clipCfg.fallbackClipName)
+                    wantedClipNames.add(clipCfg.fallbackClipName);
+            }
+            let prunedAnimations = gltf.animations.filter((clip) => wantedClipNames.has(clip.name));
+            if (prunedAnimations.length === 0 && gltf.animations.length > 0) {
+                prunedAnimations = [gltf.animations[0]];
+            }
+            // Prune permanently invisible meshes and their orphaned GPU textures
+            const hiddenMeshes = [];
+            const keptTextures = new Set();
+            gltf.scene.traverse((child) => {
+                if (!child.isMesh)
+                    return;
+                const mesh = child;
+                const mat = mesh.material;
+                if (mat && !Array.isArray(mat)) {
+                    const ud = (mat.userData || {});
+                    if (ud.visible === false) {
+                        hiddenMeshes.push(mesh);
+                        return;
+                    }
+                    collectMaterialTextures(mat, keptTextures);
+                }
+                else if (Array.isArray(mat)) {
+                    for (const m of mat) {
+                        collectMaterialTextures(m, keptTextures);
+                    }
+                }
+            });
+            const orphanTextures = new Set();
+            for (const mesh of hiddenMeshes) {
+                mesh.parent?.remove(mesh);
+                mesh.geometry?.dispose();
+                const mat = mesh.material;
+                if (mat && !Array.isArray(mat)) {
+                    collectMaterialTextures(mat, orphanTextures);
+                    mat.dispose();
+                }
+            }
+            for (const tex of orphanTextures) {
+                if (!keptTextures.has(tex)) {
+                    tex.dispose();
+                }
+            }
+            const entry = {
+                scene: gltf.scene,
+                animations: prunedAnimations
+            };
+            gltfTemplateCache.set(championId, entry);
+            return entry;
+        }
+        finally {
+            scheduleKtx2Dispose();
+            gltfLoadingPromises.delete(championId);
+        }
+    })();
+    gltfLoadingPromises.set(championId, promise);
+    return promise;
+}
 export class ChampionRig {
     slot;
     root;
@@ -29,15 +125,7 @@ export class ChampionRig {
         this.config = getChampionConfig(initialChampionId);
         this.root = new THREE.Group();
         scene.add(this.root);
-        const shadowGeo = new THREE.CircleGeometry(52, 32);
-        shadowGeo.rotateX(-Math.PI / 2);
-        const shadowMat = new THREE.MeshBasicMaterial({
-            color: 0x000000,
-            transparent: true,
-            opacity: 0.42,
-            depthWrite: false
-        });
-        this.shadowDisc = new THREE.Mesh(shadowGeo, shadowMat);
+        this.shadowDisc = new THREE.Mesh(sharedShadowGeo, sharedShadowMat);
         this.shadowDisc.position.y = 1.5;
         this.root.add(this.shadowDisc);
         if (slot === 0) {
@@ -52,6 +140,9 @@ export class ChampionRig {
     clearCurrentModel() {
         if (this.mixer) {
             this.mixer.stopAllAction();
+            if (this.model) {
+                this.mixer.uncacheRoot(this.model);
+            }
             this.mixer = null;
         }
         this.clips.clear();
@@ -59,6 +150,9 @@ export class ChampionRig {
         this.currentAnimKey = '';
         this.pelvisNode = null;
         this.castHiddenMesh = null;
+        for (const mat of this.bodyMaterials) {
+            mat.dispose();
+        }
         this.bodyMaterials = [];
         this.lastTintHex = -1;
         this.lastEmissiveInt = -1;
@@ -77,11 +171,11 @@ export class ChampionRig {
         const modelCfg = this.config.model;
         const shadowScale = Math.max(0.8, this.config.stats.hitboxRadius / 65);
         this.shadowDisc.scale.setScalar(shadowScale);
-        const gltf = await gltfLoader.loadAsync(modelCfg.url);
+        const template = await loadChampionGltfTemplate(championId);
         if (token !== this.loadToken)
             return;
         this.clearCurrentModel();
-        this.model = gltf.scene;
+        this.model = cloneSkinned(template.scene);
         this.model.scale.setScalar(modelCfg.scale);
         this.model.position.set(0, 0, 0);
         for (const boneName of modelCfg.pelvisBones) {
@@ -104,13 +198,8 @@ export class ChampionRig {
                     mat.forceSinglePass = true;
                     mesh.material = mat;
                     const ud = (mat.userData || {});
-                    if (ud.visible === false) {
-                        mesh.visible = false;
-                    }
-                    else {
-                        mesh.visible = true;
-                        this.bodyMaterials.push(mat);
-                    }
+                    mesh.visible = true;
+                    this.bodyMaterials.push(mat);
                     if (hideCfg &&
                         (mat.name === hideCfg.materialName ||
                             (hideCfg.materialHash !== undefined && ud.hash === hideCfg.materialHash))) {
@@ -121,7 +210,7 @@ export class ChampionRig {
         });
         this.root.add(this.model);
         this.mixer = new THREE.AnimationMixer(this.model);
-        for (const clip of gltf.animations) {
+        for (const clip of template.animations) {
             this.clips.set(clip.name, clip);
         }
         this.playAnim('idle', true);
@@ -171,7 +260,7 @@ export class ChampionRig {
     triggerHealOverlay() {
         this.healTintTimer = 0.55;
     }
-    update(dt, serverPlayer, onGhostTrailStep) {
+    update(dt, serverPlayer, onGhostTrailStep, nowSec = 0) {
         if (serverPlayer?.championId && serverPlayer.championId !== this.championId) {
             void this.load(serverPlayer.championId);
         }
@@ -252,7 +341,7 @@ export class ChampionRig {
         else if (serverPlayer.ghostTimer > 0) {
             emissiveHex = 0x16a8ff;
             colorHex = 0xd4f0ff;
-            emissiveInt = 0.52 + Math.sin(performance.now() * 0.014) * 0.14;
+            emissiveInt = 0.52 + Math.sin(nowSec * 14) * 0.14;
             bodyOpacity = 0.86;
         }
         else if (serverPlayer.slowTimer > 0) {

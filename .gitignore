@@ -4,3 +4,4 @@ dist-test/
 data/
 .DS_Store
 *.log
+server-rs/target/

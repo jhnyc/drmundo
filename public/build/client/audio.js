@@ -2,7 +2,7 @@
 // DATA-DRIVEN CHAMPION & SUMMONER SPELL AUDIO ENGINE
 // Preloads & plays official Riot Games .ogg files configured per champion
 // ============================================================================
-import { CHAMPION_LIST, getChampionConfig } from '../shared/champions/index.js';
+import { getChampionConfig } from '../shared/champions/index.js';
 const SUMMONER_SOUND_PATHS = {
     flash: [
         '/assets/audio/flash_sfx_1.ogg',
@@ -24,18 +24,26 @@ export class GameAudioEngine {
     muted = false;
     bufferCache = new Map();
     loadingPromises = new Map();
-    activeGhostTimers = [];
-    constructor() {
-        this.preloadAll();
-    }
-    preloadAll() {
-        const allUrls = new Set();
-        for (const list of Object.values(SUMMONER_SOUND_PATHS)) {
-            for (const url of list) {
-                allUrls.add(url);
+    activeGhostTimers = new Set();
+    warmedSummoners = false;
+    warmedChampions = new Set();
+    pendingChampionId = null;
+    constructor() { }
+    warmChampionAudio(championId) {
+        this.pendingChampionId = championId;
+        if (!this.ctx)
+            return;
+        if (!this.warmedSummoners) {
+            this.warmedSummoners = true;
+            for (const list of Object.values(SUMMONER_SOUND_PATHS)) {
+                for (const url of list) {
+                    void this.getDecodedBuffer(url);
+                }
             }
         }
-        for (const champ of CHAMPION_LIST) {
+        if (!this.warmedChampions.has(championId)) {
+            this.warmedChampions.add(championId);
+            const champ = getChampionConfig(championId);
             const lists = [
                 champ.audio.chooseVo,
                 champ.audio.tauntVo,
@@ -50,12 +58,9 @@ export class GameAudioEngine {
                 if (!list)
                     continue;
                 for (const url of list) {
-                    allUrls.add(url);
+                    void this.getDecodedBuffer(url);
                 }
             }
-        }
-        for (const url of allUrls) {
-            fetch(url).catch(() => { });
         }
     }
     ensureContext() {
@@ -68,6 +73,9 @@ export class GameAudioEngine {
         }
         if (this.ctx && this.ctx.state === 'suspended') {
             this.ctx.resume().catch(() => { });
+        }
+        if (this.ctx && this.pendingChampionId) {
+            this.warmChampionAudio(this.pendingChampionId);
         }
         return this.ctx;
     }
@@ -99,6 +107,19 @@ export class GameAudioEngine {
         this.loadingPromises.set(url, promise);
         return promise;
     }
+    playBuffer(ctx, buf, volume, playbackRate) {
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.playbackRate.value = playbackRate;
+        const gain = ctx.createGain();
+        gain.gain.value = volume;
+        src.connect(gain).connect(ctx.destination);
+        src.onended = () => {
+            src.disconnect();
+            gain.disconnect();
+        };
+        src.start(0);
+    }
     playSample(url, volume = 0.75, playbackRate = 1.0) {
         if (this.muted)
             return;
@@ -106,24 +127,12 @@ export class GameAudioEngine {
         if (ctx) {
             const cached = this.bufferCache.get(url);
             if (cached) {
-                const src = ctx.createBufferSource();
-                src.buffer = cached;
-                src.playbackRate.value = playbackRate;
-                const gain = ctx.createGain();
-                gain.gain.value = volume;
-                src.connect(gain).connect(ctx.destination);
-                src.start(0);
+                this.playBuffer(ctx, cached, volume, playbackRate);
                 return;
             }
             void this.getDecodedBuffer(url).then((buf) => {
                 if (buf && !this.muted) {
-                    const src = ctx.createBufferSource();
-                    src.buffer = buf;
-                    src.playbackRate.value = playbackRate;
-                    const gain = ctx.createGain();
-                    gain.gain.value = volume;
-                    src.connect(gain).connect(ctx.destination);
-                    src.start(0);
+                    this.playBuffer(ctx, buf, volume, playbackRate);
                 }
                 else if (!buf && !this.muted) {
                     this.playFallbackHtmlAudio(url, volume);
@@ -160,6 +169,10 @@ export class GameAudioEngine {
         gain.gain.setValueAtTime(peakGain, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + durationSec);
         osc.connect(gain).connect(ctx.destination);
+        osc.onended = () => {
+            osc.disconnect();
+            gain.disconnect();
+        };
         osc.start(now);
         osc.stop(now + durationSec + 0.02);
     }
@@ -225,13 +238,16 @@ export class GameAudioEngine {
     playGhost(durationSec = 7.0) {
         this.playSample(SUMMONER_SOUND_PATHS.ghostStart[0], 0.88);
         const loopTimer = setTimeout(() => {
+            this.activeGhostTimers.delete(loopTimer);
             this.playSample(SUMMONER_SOUND_PATHS.ghostLoop[0], 0.65);
         }, 450);
         const endDelayMs = Math.max(1500, (durationSec - 1.2) * 1000);
         const endTimer = setTimeout(() => {
+            this.activeGhostTimers.delete(endTimer);
             this.playSample(SUMMONER_SOUND_PATHS.ghostEnd[0], 0.75);
         }, endDelayMs);
-        this.activeGhostTimers.push(loopTimer, endTimer);
+        this.activeGhostTimers.add(loopTimer);
+        this.activeGhostTimers.add(endTimer);
     }
     playRecall() {
         this.playSample(SUMMONER_SOUND_PATHS.recall[0], 0.72);
@@ -253,6 +269,10 @@ export class GameAudioEngine {
         gain.gain.setValueAtTime(isFight ? 0.22 : 0.14, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + (isFight ? 0.38 : 0.18));
         osc.connect(gain).connect(ctx.destination);
+        osc.onended = () => {
+            osc.disconnect();
+            gain.disconnect();
+        };
         osc.start(now);
         osc.stop(now + (isFight ? 0.4 : 0.2));
     }

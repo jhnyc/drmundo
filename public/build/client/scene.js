@@ -5,14 +5,20 @@ import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { INV_SQRT2, LOL_SCALE, PIT_RADIUS, getEl, state } from './state.js';
+export let viewportWidth = window.innerWidth;
+export let viewportHeight = window.innerHeight;
+export function updateViewportSize(w, h) {
+    viewportWidth = w;
+    viewportHeight = h;
+}
 const container = getEl('game-canvas-container');
-export const MAX_RENDER_PIXEL_RATIO = window.innerWidth * window.innerHeight > 1_400_000 ? 1.0 : 1.25;
+export const MAX_RENDER_PIXEL_RATIO = viewportWidth * viewportHeight > 1_400_000 ? 1.0 : 1.25;
 export const renderer = new THREE.WebGLRenderer({
     antialias: true,
     powerPreference: 'high-performance'
 });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_RENDER_PIXEL_RATIO));
-renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setSize(viewportWidth, viewportHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
@@ -22,7 +28,7 @@ export const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x050b14);
 scene.fog = new THREE.FogExp2(0x07101e, 0.00014);
 // Authentic League of Legends ~55-degree isometric camera
-export const camera = new THREE.PerspectiveCamera(36, window.innerWidth / window.innerHeight, 30, 12000);
+export const camera = new THREE.PerspectiveCamera(36, viewportWidth / viewportHeight, 30, 12000);
 export function updateCameraTransform(dt = 0.016) {
     const myPlayer = state.serverPlayers[state.mySlot];
     if (state.cameraLocked && myPlayer && state.roomState === 'playing') {
@@ -55,12 +61,43 @@ scene.add(riverRimLight);
 export const groundRayPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 export const raycaster = new THREE.Raycaster();
 export const textureLoader = new THREE.TextureLoader();
-const ktx2Loader = new KTX2Loader()
-    .setTranscoderPath('/three/examples/jsm/libs/basis/')
-    .detectSupport(renderer);
 export const gltfLoader = new GLTFLoader();
-gltfLoader.setKTX2Loader(ktx2Loader);
 gltfLoader.setMeshoptDecoder(MeshoptDecoder);
+let ktx2Loader = null;
+let ktx2DisposeTimer = null;
+let ktx2ActiveLoads = 0;
+export function cancelKtx2Dispose() {
+    if (ktx2DisposeTimer !== null) {
+        clearTimeout(ktx2DisposeTimer);
+        ktx2DisposeTimer = null;
+    }
+}
+export function ensureKtx2Loader() {
+    cancelKtx2Dispose();
+    ktx2ActiveLoads += 1;
+    if (!ktx2Loader) {
+        ktx2Loader = new KTX2Loader()
+            .setTranscoderPath('/three/examples/jsm/libs/basis/')
+            .setWorkerLimit(1)
+            .detectSupport(renderer);
+        gltfLoader.setKTX2Loader(ktx2Loader);
+    }
+    return ktx2Loader;
+}
+export function scheduleKtx2Dispose(delayMs = 5000) {
+    ktx2ActiveLoads = Math.max(0, ktx2ActiveLoads - 1);
+    if (ktx2ActiveLoads > 0)
+        return;
+    cancelKtx2Dispose();
+    ktx2DisposeTimer = setTimeout(() => {
+        ktx2DisposeTimer = null;
+        if (ktx2ActiveLoads === 0 && ktx2Loader) {
+            ktx2Loader.dispose();
+            ktx2Loader = null;
+            gltfLoader.setKTX2Loader(null);
+        }
+    }, delayMs);
+}
 export const objLoader = new OBJLoader();
 export const arenaGroup = new THREE.Group();
 scene.add(arenaGroup);
@@ -73,7 +110,7 @@ export async function buildBaronPitEnvironment() {
     const planeSize = 4450;
     const offsetX = -(0.5908 - 0.5) * planeSize;
     const offsetZ = (0.6143 - 0.5) * planeSize;
-    const groundGeo = new THREE.PlaneGeometry(planeSize, planeSize, 64, 64);
+    const groundGeo = new THREE.PlaneGeometry(planeSize, planeSize, 48, 48);
     groundGeo.rotateX(-Math.PI / 2);
     const posAttr = groundGeo.attributes.position;
     for (let i = 0; i < posAttr.count; i++) {
@@ -100,8 +137,8 @@ export async function buildBaronPitEnvironment() {
         map: groundTex
     });
     const groundMesh = new THREE.Mesh(groundGeo, groundMat);
-    groundMesh.receiveShadow = true;
     arenaGroup.add(groundMesh);
+    ensureKtx2Loader();
     try {
         const [cwGltf, sightWardObj, sightWardTex] = await Promise.all([
             gltfLoader.loadAsync('/assets/models/jammerdevice.glb'),
@@ -169,6 +206,9 @@ export async function buildBaronPitEnvironment() {
     }
     catch (err) {
         console.warn('Ward models load warning:', err);
+    }
+    finally {
+        scheduleKtx2Dispose();
     }
     const pCount = 90;
     const pGeo = new THREE.BufferGeometry();

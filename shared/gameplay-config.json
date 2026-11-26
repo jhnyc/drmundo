@@ -1,0 +1,93 @@
+{
+  "tickRate": 60,
+  "pitRadius": 820,
+  "lineBuffer": 52,
+  "defaultChampionId": "drmundo",
+  "summonerSpells": {
+    "flash": {
+      "id": "flash",
+      "cooldownFast": 25,
+      "cooldownStandard": 120,
+      "range": 425
+    },
+    "heal": {
+      "id": "heal",
+      "cooldownFast": 30,
+      "cooldownStandard": 120,
+      "healAmount": 260,
+      "speedBoost": 0.3,
+      "duration": 1.5
+    },
+    "ghost": {
+      "id": "ghost",
+      "cooldownFast": 30,
+      "cooldownStandard": 120,
+      "speedBoost": 0.38,
+      "duration": 7
+    }
+  },
+  "champions": {
+    "drmundo": {
+      "id": "drmundo",
+      "name": "Dr. Mundo",
+      "defaultPlayerName": "Dr. Mundo",
+      "defaultBotName": "Corporate Mundo (Bot)",
+      "stats": {
+        "maxHp": 1850,
+        "hpRegenPerSec": 16,
+        "baseMoveSpeed": 385,
+        "hitboxRadius": 65
+      },
+      "q": {
+        "archetype": "linear_projectile",
+        "hpCost": 50,
+        "refundOnHit": 50,
+        "cooldown": 4,
+        "castTime": 0.22,
+        "range": 1050,
+        "speed": 2000,
+        "radius": 60,
+        "spawnOffset": 55,
+        "damage": {
+          "flatMin": 215,
+          "percentCurrentHp": 0.22
+        },
+        "slow": {
+          "percent": 0.4,
+          "duration": 2
+        }
+      }
+    },
+    "chogath": {
+      "id": "chogath",
+      "name": "Cho'Gath",
+      "defaultPlayerName": "Cho'Gath",
+      "defaultBotName": "Gentleman Cho'Gath (Bot)",
+      "stats": {
+        "maxHp": 1920,
+        "hpRegenPerSec": 9,
+        "baseMoveSpeed": 375,
+        "hitboxRadius": 72
+      },
+      "q": {
+        "archetype": "delayed_ground_aoe",
+        "hpCost": 0,
+        "refundOnHit": 0,
+        "cooldown": 4.8,
+        "castTime": 0.25,
+        "delay": 0.625,
+        "range": 950,
+        "radius": 175,
+        "damage": {
+          "flatMin": 310,
+          "percentCurrentHp": 0.08
+        },
+        "knockupDuration": 0.85,
+        "slow": {
+          "percent": 0.5,
+          "duration": 1.5
+        }
+      }
+    }
+  }
+}

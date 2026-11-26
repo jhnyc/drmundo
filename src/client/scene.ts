@@ -6,14 +6,22 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { INV_SQRT2, LOL_SCALE, PIT_RADIUS, getEl, state } from './state.js';
 
+export let viewportWidth = window.innerWidth;
+export let viewportHeight = window.innerHeight;
+
+export function updateViewportSize(w: number, h: number): void {
+  viewportWidth = w;
+  viewportHeight = h;
+}
+
 const container = getEl<HTMLDivElement>('game-canvas-container');
-export const MAX_RENDER_PIXEL_RATIO = window.innerWidth * window.innerHeight > 1_400_000 ? 1.0 : 1.25;
+export const MAX_RENDER_PIXEL_RATIO = viewportWidth * viewportHeight > 1_400_000 ? 1.0 : 1.25;
 export const renderer = new THREE.WebGLRenderer({
   antialias: true,
   powerPreference: 'high-performance'
 });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_RENDER_PIXEL_RATIO));
-renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setSize(viewportWidth, viewportHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
@@ -27,7 +35,7 @@ scene.fog = new THREE.FogExp2(0x07101e, 0.00014);
 // Authentic League of Legends ~55-degree isometric camera
 export const camera = new THREE.PerspectiveCamera(
   36,
-  window.innerWidth / window.innerHeight,
+  viewportWidth / viewportHeight,
   30,
   12000
 );
@@ -70,13 +78,46 @@ export const groundRayPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 export const raycaster = new THREE.Raycaster();
 
 export const textureLoader = new THREE.TextureLoader();
-const ktx2Loader = new KTX2Loader()
-  .setTranscoderPath('/three/examples/jsm/libs/basis/')
-  .detectSupport(renderer);
-
 export const gltfLoader = new GLTFLoader();
-gltfLoader.setKTX2Loader(ktx2Loader);
 gltfLoader.setMeshoptDecoder(MeshoptDecoder);
+
+let ktx2Loader: KTX2Loader | null = null;
+let ktx2DisposeTimer: ReturnType<typeof setTimeout> | null = null;
+let ktx2ActiveLoads = 0;
+
+export function cancelKtx2Dispose(): void {
+  if (ktx2DisposeTimer !== null) {
+    clearTimeout(ktx2DisposeTimer);
+    ktx2DisposeTimer = null;
+  }
+}
+
+export function ensureKtx2Loader(): KTX2Loader {
+  cancelKtx2Dispose();
+  ktx2ActiveLoads += 1;
+  if (!ktx2Loader) {
+    ktx2Loader = new KTX2Loader()
+      .setTranscoderPath('/three/examples/jsm/libs/basis/')
+      .setWorkerLimit(1)
+      .detectSupport(renderer);
+    gltfLoader.setKTX2Loader(ktx2Loader);
+  }
+  return ktx2Loader;
+}
+
+export function scheduleKtx2Dispose(delayMs = 5000): void {
+  ktx2ActiveLoads = Math.max(0, ktx2ActiveLoads - 1);
+  if (ktx2ActiveLoads > 0) return;
+  cancelKtx2Dispose();
+  ktx2DisposeTimer = setTimeout(() => {
+    ktx2DisposeTimer = null;
+    if (ktx2ActiveLoads === 0 && ktx2Loader) {
+      ktx2Loader.dispose();
+      ktx2Loader = null;
+      gltfLoader.setKTX2Loader(null);
+    }
+  }, delayMs);
+}
 
 export const objLoader = new OBJLoader();
 
@@ -95,7 +136,7 @@ export async function buildBaronPitEnvironment(): Promise<void> {
   const offsetX = -(0.5908 - 0.5) * planeSize;
   const offsetZ = (0.6143 - 0.5) * planeSize;
 
-  const groundGeo = new THREE.PlaneGeometry(planeSize, planeSize, 64, 64);
+  const groundGeo = new THREE.PlaneGeometry(planeSize, planeSize, 48, 48);
   groundGeo.rotateX(-Math.PI / 2);
 
   const posAttr = groundGeo.attributes.position;
@@ -129,9 +170,9 @@ export async function buildBaronPitEnvironment(): Promise<void> {
     map: groundTex
   });
   const groundMesh = new THREE.Mesh(groundGeo, groundMat);
-  groundMesh.receiveShadow = true;
   arenaGroup.add(groundMesh);
 
+  ensureKtx2Loader();
   try {
     const [cwGltf, sightWardObj, sightWardTex] = await Promise.all([
       gltfLoader.loadAsync('/assets/models/jammerdevice.glb'),
@@ -203,6 +244,8 @@ export async function buildBaronPitEnvironment(): Promise<void> {
     }
   } catch (err) {
     console.warn('Ward models load warning:', err);
+  } finally {
+    scheduleKtx2Dispose();
   }
 
   const pCount = 90;

@@ -37,7 +37,10 @@ export function updateBotAI(
   // 2. Check delayed ground AoE zones under the bot -> move radially out
   const dangerZone = room.groundZones.find((zone) => {
     if (zone.ownerSlot === bot.slot) return false;
-    return Math.hypot(bot.x - zone.x, bot.z - zone.z) < botChamp.stats.hitboxRadius + zone.radius + 60;
+    const dx = bot.x - zone.x;
+    const dz = bot.z - zone.z;
+    const dangerRadius = botChamp.stats.hitboxRadius + zone.radius + 60;
+    return dx * dx + dz * dz < dangerRadius * dangerRadius;
   });
 
   if (dangerProj && bot.knockupTimer <= 0) {
@@ -50,15 +53,17 @@ export function updateBotAI(
     bot.targetX = clamped.x;
     bot.targetZ = clamped.z;
 
-    const distToProj = Math.hypot(bot.x - dangerProj.x, bot.z - dangerProj.z);
+    const projDx = bot.x - dangerProj.x;
+    const projDz = bot.z - dangerProj.z;
+    const distSqToProj = projDx * projDx + projDz * projDz;
     const flashIdx = bot.spells.indexOf('flash');
-    if (flashIdx !== -1 && bot.spellCd[flashIdx] <= 0 && distToProj < 260 && bot.hp < 650) {
+    if (flashIdx !== -1 && bot.spellCd[flashIdx] <= 0 && distSqToProj < 260 * 260 && bot.hp < 650) {
       useSummonerSpell(room, bot, flashIdx, clamped.x, clamped.z);
     }
   } else if (dangerZone && bot.knockupTimer <= 0) {
     const dx = bot.x - dangerZone.x;
     const dz = bot.z - dangerZone.z;
-    const len = Math.hypot(dx, dz);
+    const len = Math.sqrt(dx * dx + dz * dz);
     const escapeDirX = len > 1e-3 ? dx / len : bot.slot === 0 ? -INV_SQRT2 : INV_SQRT2;
     const escapeDirZ = len > 1e-3 ? dz / len : bot.slot === 0 ? -INV_SQRT2 : INV_SQRT2;
     const escapeDist = dangerZone.radius + botChamp.stats.hitboxRadius + 110;
@@ -100,11 +105,16 @@ export function updateBotAI(
 
   if (bot.qCd <= 0 && bot.castTimer <= 0 && bot.knockupTimer <= 0 && ai.qThinkCooldown <= 0) {
     const q = botChamp.q;
-    const dist = Math.hypot(opponent.x - bot.x, opponent.z - bot.z);
-    if (dist <= q.range - 35) {
+    const dxOpp = opponent.x - bot.x;
+    const dzOpp = opponent.z - bot.z;
+    const distSq = dxOpp * dxOpp + dzOpp * dzOpp;
+    const maxCastRange = q.range - 35;
+    if (distSq <= maxCastRange * maxCastRange) {
+      const dist = Math.sqrt(distSq);
       const oppDx = opponent.targetX - opponent.x;
       const oppDz = opponent.targetZ - opponent.z;
-      const oppMoveDist = Math.hypot(oppDx, oppDz);
+      const oppMoveDistSq = oppDx * oppDx + oppDz * oppDz;
+      const oppMoveDist = oppMoveDistSq > 225 ? Math.sqrt(oppMoveDistSq) : 0;
 
       let aimX = opponent.x;
       let aimZ = opponent.z;

@@ -6,8 +6,23 @@ import test from 'node:test';
 import { WebSocket } from 'ws';
 import type { ServerToClientMessage } from '../shared/types.js';
 
-const PORT = 3297;
+const PORT = Number(process.env.TEST_SERVER_PORT) || 3297;
 const SNAPSHOT_FILE = `/tmp/drmundo-e2e-snapshot-${process.pid}.json`;
+
+function resolveServerSpawn(): { cmd: string; args: string[] } {
+  const customCmd = process.env.TEST_SERVER_CMD?.trim();
+  if (customCmd) {
+    const rawArgs = process.env.TEST_SERVER_ARGS?.trim();
+    let args: string[] = [];
+    if (rawArgs) {
+      args = rawArgs.startsWith('[') ? (JSON.parse(rawArgs) as string[]) : rawArgs.split(/\s+/);
+    }
+    return { cmd: customCmd, args };
+  }
+  const serverEntry = path.resolve(process.cwd(), 'dist', 'server.js');
+  assert.ok(fs.existsSync(serverEntry), 'dist/server.js must be built before running E2E test');
+  return { cmd: 'node', args: [serverEntry] };
+}
 
 function connectClient(url: string, inbox: ServerToClientMessage[]): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
@@ -48,10 +63,9 @@ function nextMatching(
 }
 
 test('live server WS enforces same-champ vs same-champ mirror and executes ChoGath Rupture 1v1', async () => {
-  const serverEntry = path.resolve(process.cwd(), 'dist', 'server.js');
-  assert.ok(fs.existsSync(serverEntry), 'dist/server.js must be built before running E2E test');
+  const { cmd, args } = resolveServerSpawn();
 
-  const proc = spawn('node', [serverEntry], {
+  const proc = spawn(cmd, args, {
     env: {
       ...process.env,
       PORT: String(PORT),
@@ -185,6 +199,27 @@ test('live server WS enforces same-champ vs same-champ mirror and executes ChoGa
       2000
     );
     assert.equal(zoneEruptEv.type, 'state_snapshot');
+
+    // Verify HTTP endpoints: /healthz, /api/rooms, and gzip-compressed /three/build/three.module.js
+    const healthRes = await fetch(`http://127.0.0.1:${PORT}/healthz`);
+    assert.equal(healthRes.status, 200);
+    const healthBody = (await healthRes.json()) as { ok: boolean; rooms: number };
+    assert.equal(healthBody.ok, true);
+    assert.ok(healthBody.rooms >= 1);
+
+    const roomsRes = await fetch(`http://127.0.0.1:${PORT}/api/rooms`);
+    assert.equal(roomsRes.status, 200);
+    const roomsBody = (await roomsRes.json()) as { rooms: Array<{ id: string }> };
+    assert.ok(Array.isArray(roomsBody.rooms));
+    assert.ok(roomsBody.rooms.some((r) => r.id === joined0.roomId));
+
+    const threeRes = await fetch(`http://127.0.0.1:${PORT}/three/build/three.module.js`, {
+      headers: { 'Accept-Encoding': 'gzip' }
+    });
+    assert.equal(threeRes.status, 200);
+    assert.equal(threeRes.headers.get('content-encoding'), 'gzip');
+    const threeText = await threeRes.text();
+    assert.ok(threeText.includes('WebGLRenderer'));
   } finally {
     ws0?.close();
     ws1?.close();

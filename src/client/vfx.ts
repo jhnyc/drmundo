@@ -6,7 +6,14 @@ import {
   getCachedProjectileTemplate,
   getCachedZoneMeshTemplate
 } from './champion.js';
-import { camera, renderer, scene, textureLoader, vfxTextures } from './scene.js';
+import {
+  camera,
+  renderer,
+  scene,
+  textureLoader,
+  viewportHeight,
+  vfxTextures
+} from './scene.js';
 import { state } from './state.js';
 
 interface ActiveProjectileEntry {
@@ -90,6 +97,103 @@ const debrisPoints = new THREE.Points(debrisGeo, debrisMat);
 debrisPoints.frustumCulled = false;
 debrisPoints.visible = false;
 scene.add(debrisPoints);
+
+// Single pooled GPU Points system for all sparkles & ghost orbs (1 draw call, zero runtime allocations)
+const MAX_SPARKLES = 192;
+const sparklePositions = new Float32Array(MAX_SPARKLES * 3);
+const sparkleVelocities = new Float32Array(MAX_SPARKLES * 3);
+const sparkleColors = new Float32Array(MAX_SPARKLES * 3);
+const sparkleSizes = new Float32Array(MAX_SPARKLES);
+const sparkleBaseSizes = new Float32Array(MAX_SPARKLES);
+const sparkleAlphas = new Float32Array(MAX_SPARKLES);
+const sparkleAges = new Float32Array(MAX_SPARKLES);
+const sparkleDurations = new Float32Array(MAX_SPARKLES);
+const sparkleKinds = new Uint8Array(MAX_SPARKLES); // 0 = sparkle, 1 = ghost orb
+let sparkleActiveCount = 0;
+
+for (let i = 0; i < MAX_SPARKLES; i++) {
+  sparklePositions[i * 3 + 1] = -9999;
+}
+
+const sparkleGeo = new THREE.BufferGeometry();
+const sparklePosAttr = new THREE.BufferAttribute(sparklePositions, 3);
+sparklePosAttr.setUsage(THREE.DynamicDrawUsage);
+const sparkleColorAttr = new THREE.BufferAttribute(sparkleColors, 3);
+sparkleColorAttr.setUsage(THREE.DynamicDrawUsage);
+const sparkleSizeAttr = new THREE.BufferAttribute(sparkleSizes, 1);
+sparkleSizeAttr.setUsage(THREE.DynamicDrawUsage);
+const sparkleAlphaAttr = new THREE.BufferAttribute(sparkleAlphas, 1);
+sparkleAlphaAttr.setUsage(THREE.DynamicDrawUsage);
+
+sparkleGeo.setAttribute('position', sparklePosAttr);
+sparkleGeo.setAttribute('aColor', sparkleColorAttr);
+sparkleGeo.setAttribute('aSize', sparkleSizeAttr);
+sparkleGeo.setAttribute('aAlpha', sparkleAlphaAttr);
+
+const _tempColor = new THREE.Color();
+const sparkleUniforms: {
+  uScale: { value: number };
+  uMap: { value: THREE.Texture | null };
+  uHasMap: { value: number };
+} = {
+  uScale: {
+    value:
+      (viewportHeight * renderer.getPixelRatio() * 0.5) /
+      Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5))
+  },
+  uMap: { value: null },
+  uHasMap: { value: 0 }
+};
+
+export function updateVfxViewportScale(height: number, pixelRatio: number): void {
+  sparkleUniforms.uScale.value =
+    (height * pixelRatio * 0.5) / Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5));
+}
+
+const sparkleShaderMat = new THREE.ShaderMaterial({
+  uniforms: sparkleUniforms,
+  vertexShader: `
+    attribute vec3 aColor;
+    attribute float aSize;
+    attribute float aAlpha;
+    uniform float uScale;
+    varying vec3 vColor;
+    varying float vAlpha;
+    void main() {
+      vColor = aColor;
+      vAlpha = aAlpha;
+      vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = aSize * uScale / max(1.0, -mvPosition.z);
+      gl_Position = projectionMatrix * mvPosition;
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D uMap;
+    uniform float uHasMap;
+    varying vec3 vColor;
+    varying float vAlpha;
+    void main() {
+      if (vAlpha <= 0.005) discard;
+      vec2 uv = gl_PointCoord;
+      float dist = length(uv - vec2(0.5));
+      if (dist > 0.5) discard;
+      vec4 tex = uHasMap > 0.5
+        ? texture2D(uMap, vec2(uv.x, 1.0 - uv.y))
+        : vec4(1.0, 1.0, 1.0, 1.0 - smoothstep(0.12, 0.5, dist));
+      float alpha = tex.a * vAlpha;
+      if (alpha <= 0.005) discard;
+      gl_FragColor = vec4(tex.rgb * vColor, alpha);
+    }
+  `,
+  transparent: true,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false
+});
+
+const sparklePoints = new THREE.Points(sparkleGeo, sparkleShaderMat);
+sparklePoints.frustumCulled = false;
+sparklePoints.visible = false;
+scene.add(sparklePoints);
 
 function extractTopLeftShardTexture(sourceTex: THREE.Texture): THREE.CanvasTexture | null {
   const img = sourceTex.image as HTMLImageElement | HTMLCanvasElement | undefined;
@@ -644,6 +748,37 @@ export function spawnZoneEruptionVfx(
   }
 }
 
+const MAX_RING_BURSTS = 12;
+interface PooledRingBurst {
+  mesh: THREE.Mesh;
+  mat: THREE.MeshBasicMaterial;
+  active: boolean;
+  age: number;
+  duration: number;
+  baseScale: number;
+  scaleRatio: number;
+}
+const ringBurstPool: PooledRingBurst[] = [];
+for (let i = 0; i < MAX_RING_BURSTS; i++) {
+  const mat = createVfxBasicMat({
+    color: 0xffffff,
+    opacity: 0.9,
+    blending: THREE.AdditiveBlending
+  });
+  const mesh = new THREE.Mesh(sharedRingBurstGeo, mat);
+  mesh.visible = false;
+  scene.add(mesh);
+  ringBurstPool.push({
+    mesh,
+    mat,
+    active: false,
+    age: 0,
+    duration: 0.42,
+    baseScale: 20,
+    scaleRatio: 1
+  });
+}
+
 export function spawnRingBurstVfx(
   x: number,
   z: number,
@@ -652,32 +787,30 @@ export function spawnRingBurstVfx(
   endR = 135,
   duration = 0.42
 ): void {
-  const mat = createVfxBasicMat({
-    color: colorHex,
-    opacity: 0.9,
-    blending: THREE.AdditiveBlending
-  });
-  const mesh = new THREE.Mesh(sharedRingBurstGeo, mat);
-  mesh.position.set(x, 6, z);
-  const baseScale = Math.max(1, startR);
-  mesh.scale.setScalar(baseScale);
-  scene.add(mesh);
-
-  const scaleRatio = endR / baseScale;
-  transientVfx.push({
-    mesh,
-    age: 0,
-    duration,
-    update() {
-      const t = this.age / this.duration;
-      const s = baseScale * (1 + (scaleRatio - 1) * (1 - Math.pow(1 - t, 2)));
-      this.mesh.scale.setScalar(s);
-      mat.opacity = 0.9 * (1 - t);
-    },
-    onDispose() {
-      mat.dispose();
+  let slot = ringBurstPool[0];
+  let maxAge = -1;
+  for (const entry of ringBurstPool) {
+    if (!entry.active) {
+      slot = entry;
+      break;
     }
-  });
+    if (entry.age > maxAge) {
+      maxAge = entry.age;
+      slot = entry;
+    }
+  }
+
+  const baseScale = Math.max(1, startR);
+  slot.active = true;
+  slot.age = 0;
+  slot.duration = duration;
+  slot.baseScale = baseScale;
+  slot.scaleRatio = endR / baseScale;
+  slot.mat.color.setHex(colorHex);
+  slot.mat.opacity = 0.9;
+  slot.mesh.position.set(x, 6, z);
+  slot.mesh.scale.setScalar(baseScale);
+  slot.mesh.visible = true;
 }
 
 let moveArrowBladeGeo: THREE.BufferGeometry | null = null;
@@ -753,42 +886,67 @@ function getMoveArrowAssets(): { geo: THREE.BufferGeometry; tex: THREE.CanvasTex
   return { geo: moveArrowBladeGeo, tex: moveArrowTexture };
 }
 
-export function spawnMoveClickIndicator(x: number, z: number): void {
+const MAX_MOVE_INDICATORS = 8;
+interface PooledMoveIndicator {
+  group: THREE.Group;
+  mat: THREE.MeshBasicMaterial;
+  active: boolean;
+  age: number;
+  duration: number;
+}
+const moveIndicatorPool: PooledMoveIndicator[] = [];
+
+function ensureMoveIndicatorPool(): PooledMoveIndicator[] {
+  if (moveIndicatorPool.length > 0) return moveIndicatorPool;
   const { geo, tex } = getMoveArrowAssets();
-  const group = new THREE.Group();
-  group.position.set(x, 2, z);
-
-  const mat = createVfxBasicMat({
-    map: tex,
-    color: 0xffffff,
-    opacity: 0.96
-  });
-
   const angles = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
-  for (const ang of angles) {
-    const blade = new THREE.Mesh(geo, mat);
-    blade.rotation.y = ang;
-    group.add(blade);
+  for (let i = 0; i < MAX_MOVE_INDICATORS; i++) {
+    const group = new THREE.Group();
+    const mat = createVfxBasicMat({
+      map: tex,
+      color: 0xffffff,
+      opacity: 0.96
+    });
+    for (const ang of angles) {
+      const blade = new THREE.Mesh(geo, mat);
+      blade.rotation.y = ang;
+      group.add(blade);
+    }
+    group.visible = false;
+    scene.add(group);
+    moveIndicatorPool.push({
+      group,
+      mat,
+      active: false,
+      age: 0,
+      duration: 0.34
+    });
+  }
+  return moveIndicatorPool;
+}
+
+export function spawnMoveClickIndicator(x: number, z: number): void {
+  const pool = ensureMoveIndicatorPool();
+  let slot = pool[0];
+  let maxAge = -1;
+  for (const entry of pool) {
+    if (!entry.active) {
+      slot = entry;
+      break;
+    }
+    if (entry.age > maxAge) {
+      maxAge = entry.age;
+      slot = entry;
+    }
   }
 
-  scene.add(group);
-
-  const duration = 0.34;
-  transientVfx.push({
-    mesh: group,
-    age: 0,
-    duration,
-    update() {
-      const t = this.age / this.duration;
-      const ease = 1 - Math.pow(1 - t, 2);
-      const s = 1.05 - 0.68 * ease;
-      group.scale.setScalar(s);
-      mat.opacity = t < 0.45 ? 0.96 : 0.96 * (1 - (t - 0.45) / 0.55);
-    },
-    onDispose() {
-      mat.dispose();
-    }
-  });
+  slot.active = true;
+  slot.age = 0;
+  slot.duration = 0.34;
+  slot.group.position.set(x, 2, z);
+  slot.group.scale.setScalar(1.05);
+  slot.mat.opacity = 0.96;
+  slot.group.visible = true;
 }
 
 function createSkybeamMesh(
@@ -797,26 +955,89 @@ function createSkybeamMesh(
   colorHex: number,
   width: number,
   height: number
-): { group: THREE.Group; mats: THREE.MeshBasicMaterial[] } {
+): { group: THREE.Group; mat: THREE.MeshBasicMaterial } {
   const group = new THREE.Group();
   group.position.set(x, 0, z);
 
-  const mats: THREE.MeshBasicMaterial[] = [];
+  const mat = createVfxBasicMat({
+    map: vfxTextures.skybeamGlow || undefined,
+    color: colorHex,
+    opacity: 0.92,
+    blending: THREE.AdditiveBlending
+  });
   const angles = [0, Math.PI / 3, (2 * Math.PI) / 3];
   for (const ang of angles) {
-    const mat = createVfxBasicMat({
-      map: vfxTextures.skybeamGlow || undefined,
-      color: colorHex,
-      opacity: 0.92,
-      blending: THREE.AdditiveBlending
-    });
     const plane = new THREE.Mesh(sharedSkybeamGeo, mat);
     plane.scale.set(width, height, 1);
     plane.rotation.y = ang;
     group.add(plane);
-    mats.push(mat);
   }
-  return { group, mats };
+  return { group, mat };
+}
+
+function syncSparkleMap(): void {
+  const tex = vfxTextures.flashSpark || vfxTextures.flashHalo || null;
+  if (sparkleUniforms.uMap.value !== tex) {
+    sparkleUniforms.uMap.value = tex;
+    sparkleUniforms.uHasMap.value = tex ? 1.0 : 0.0;
+  }
+}
+
+function allocSparkleSlot(
+  x: number,
+  y: number,
+  z: number,
+  vx: number,
+  vy: number,
+  vz: number,
+  colorHex: number,
+  size: number,
+  duration: number,
+  kind: 0 | 1,
+  initialAlpha: number
+): void {
+  syncSparkleMap();
+  let slot = -1;
+  let maxAge = -1;
+  for (let i = 0; i < MAX_SPARKLES; i++) {
+    if (sparkleDurations[i] <= 0) {
+      slot = i;
+      break;
+    }
+    if (sparkleAges[i] > maxAge) {
+      maxAge = sparkleAges[i];
+      slot = i;
+    }
+  }
+  if (slot === -1) slot = 0;
+
+  const idx = slot * 3;
+  sparklePositions[idx] = x;
+  sparklePositions[idx + 1] = y;
+  sparklePositions[idx + 2] = z;
+  sparkleVelocities[idx] = vx;
+  sparkleVelocities[idx + 1] = vy;
+  sparkleVelocities[idx + 2] = vz;
+
+  _tempColor.setHex(colorHex);
+  sparkleColors[idx] = _tempColor.r;
+  sparkleColors[idx + 1] = _tempColor.g;
+  sparkleColors[idx + 2] = _tempColor.b;
+
+  sparkleBaseSizes[slot] = size;
+  sparkleSizes[slot] = size;
+  sparkleAlphas[slot] = initialAlpha;
+  sparkleAges[slot] = 0;
+  sparkleDurations[slot] = duration;
+  sparkleKinds[slot] = kind;
+  if (sparkleDurations[slot] > 0) {
+    sparkleActiveCount = Math.max(sparkleActiveCount, 1);
+  }
+  sparklePoints.visible = true;
+  sparklePosAttr.needsUpdate = true;
+  sparkleColorAttr.needsUpdate = true;
+  sparkleSizeAttr.needsUpdate = true;
+  sparkleAlphaAttr.needsUpdate = true;
 }
 
 function spawnSparkleParticle(
@@ -830,42 +1051,56 @@ function spawnSparkleParticle(
   size: number,
   duration: number
 ): void {
-  const mat = new THREE.SpriteMaterial({
-    map: vfxTextures.flashSpark || vfxTextures.healSparkles || undefined,
-    color: colorHex,
-    transparent: true,
-    opacity: 1.0,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false
-  });
-  const sprite = new THREE.Sprite(mat);
-  sprite.position.set(x, y, z);
-  sprite.scale.setScalar(size);
-  scene.add(sprite);
+  allocSparkleSlot(x, y, z, vx, vy, vz, colorHex, size, duration, 0, 1.0);
+}
 
-  transientVfx.push({
-    mesh: sprite,
-    age: 0,
-    duration,
-    update(dt: number) {
-      const t = this.age / this.duration;
-      sprite.position.x += vx * dt;
-      sprite.position.y += vy * dt;
-      sprite.position.z += vz * dt;
-      const pulse = 0.8 + 0.35 * Math.sin(this.age * 28);
-      sprite.scale.setScalar(size * (1 - t * 0.55) * pulse);
-      mat.opacity = Math.max(0, 1 - Math.pow(t, 1.5));
-    },
-    onDispose() {
-      mat.dispose();
+function updateSparklePool(dt: number): void {
+  if (sparkleActiveCount === 0) return;
+
+  let active = 0;
+  for (let i = 0; i < MAX_SPARKLES; i++) {
+    const dur = sparkleDurations[i];
+    if (dur <= 0) continue;
+
+    sparkleAges[i] += dt;
+    const idx = i * 3;
+    if (sparkleAges[i] >= dur) {
+      sparkleDurations[i] = 0;
+      sparkleAlphas[i] = 0;
+      sparklePositions[idx + 1] = -9999;
+      continue;
     }
-  });
+
+    active += 1;
+    const age = sparkleAges[i];
+    const t = age / dur;
+    sparklePositions[idx] += sparkleVelocities[idx] * dt;
+    sparklePositions[idx + 1] += sparkleVelocities[idx + 1] * dt;
+    sparklePositions[idx + 2] += sparkleVelocities[idx + 2] * dt;
+
+    if (sparkleKinds[i] === 0) {
+      const pulse = 0.8 + 0.35 * Math.sin(age * 28);
+      sparkleSizes[i] = sparkleBaseSizes[i] * (1 - t * 0.55) * pulse;
+      sparkleAlphas[i] = Math.max(0, 1 - Math.pow(t, 1.5));
+    } else {
+      sparkleSizes[i] = sparkleBaseSizes[i] * (1 - t * 0.45);
+      sparkleAlphas[i] = 0.72 * Math.pow(1 - t, 1.3);
+    }
+  }
+
+  sparkleActiveCount = active;
+  sparklePosAttr.needsUpdate = true;
+  sparkleSizeAttr.needsUpdate = true;
+  sparkleAlphaAttr.needsUpdate = true;
+  if (active === 0) {
+    sparklePoints.visible = false;
+  }
 }
 
 function spawnFlashBurstAtPoint(x: number, z: number, isDestination: boolean): void {
   const beamWidth = isDestination ? 44 : 38;
   const beamHeight = isDestination ? 560 : 480;
-  const { group: beamGroup, mats: beamMats } = createSkybeamMesh(
+  const { group: beamGroup, mat: beamMat } = createSkybeamMesh(
     x,
     z,
     0xfff088,
@@ -882,12 +1117,10 @@ function spawnFlashBurstAtPoint(x: number, z: number, isDestination: boolean): v
       const t = this.age / this.duration;
       const widthScale = Math.max(0.15, 1 - t * 0.75);
       beamGroup.scale.set(widthScale, 1 + t * 0.12, widthScale);
-      for (const m of beamMats) {
-        m.opacity = 0.95 * Math.pow(1 - t, 1.6);
-      }
+      beamMat.opacity = 0.95 * Math.pow(1 - t, 1.6);
     },
     onDispose() {
-      for (const m of beamMats) m.dispose();
+      beamMat.dispose();
     }
   });
 
@@ -1105,93 +1338,161 @@ export function spawnGhostVfx(_slot: number, x: number, z: number): void {
   });
 }
 
+const MAX_GHOST_RIBBONS = 24;
+interface PooledGhostRibbon {
+  mesh: THREE.Mesh;
+  mat: THREE.MeshBasicMaterial;
+  active: boolean;
+  age: number;
+  duration: number;
+  backX: number;
+  backZ: number;
+}
+const ghostRibbonPool: PooledGhostRibbon[] = [];
+for (let i = 0; i < MAX_GHOST_RIBBONS; i++) {
+  const mat = createVfxBasicMat({
+    color: 0x24c8ff,
+    opacity: 0.68,
+    blending: THREE.AdditiveBlending
+  });
+  const mesh = new THREE.Mesh(sharedGhostRibbonGeo, mat);
+  mesh.visible = false;
+  scene.add(mesh);
+  ghostRibbonPool.push({
+    mesh,
+    mat,
+    active: false,
+    age: 0,
+    duration: 0.36,
+    backX: 0,
+    backZ: 0
+  });
+}
+
 export function spawnGhostTrailStep(x: number, z: number, facingAngle: number): void {
   const backX = -Math.sin(facingAngle);
   const backZ = -Math.cos(facingAngle);
   const sideX = Math.cos(facingAngle);
   const sideZ = -Math.sin(facingAngle);
 
-  const ribbonMat = createVfxBasicMat({
-    map: vfxTextures.ghostTrail || vfxTextures.hasteShockwave || undefined,
-    color: 0x24c8ff,
-    opacity: 0.68,
-    blending: THREE.AdditiveBlending
-  });
-  const ribbon = new THREE.Mesh(sharedGhostRibbonGeo, ribbonMat);
+  let ribbonSlot = ghostRibbonPool[0];
+  let maxAge = -1;
+  for (const entry of ghostRibbonPool) {
+    if (!entry.active) {
+      ribbonSlot = entry;
+      break;
+    }
+    if (entry.age > maxAge) {
+      maxAge = entry.age;
+      ribbonSlot = entry;
+    }
+  }
+
+  const ribbonTex = vfxTextures.ghostTrail || vfxTextures.hasteShockwave || null;
+  if (ribbonSlot.mat.map !== ribbonTex) {
+    ribbonSlot.mat.map = ribbonTex;
+    ribbonSlot.mat.needsUpdate = true;
+  }
+
   const lateralOffset = (Math.random() - 0.5) * 48;
   const heightOffset = 35 + Math.random() * 85;
-  ribbon.position.set(
+  ribbonSlot.active = true;
+  ribbonSlot.age = 0;
+  ribbonSlot.duration = 0.36;
+  ribbonSlot.backX = backX;
+  ribbonSlot.backZ = backZ;
+  ribbonSlot.mesh.position.set(
     x + backX * 28 + sideX * lateralOffset,
     heightOffset,
     z + backZ * 28 + sideZ * lateralOffset
   );
-  ribbon.rotation.y = facingAngle + Math.PI / 2;
-  ribbon.rotation.z = (Math.random() - 0.5) * 0.35;
-  scene.add(ribbon);
-
-  transientVfx.push({
-    mesh: ribbon,
-    age: 0,
-    duration: 0.36,
-    update(dt: number) {
-      const t = this.age / this.duration;
-      ribbon.position.x += backX * 95 * dt;
-      ribbon.position.z += backZ * 95 * dt;
-      ribbon.scale.set(1 + t * 0.45, Math.max(0.2, 1 - t * 0.6), 1);
-      ribbonMat.opacity = 0.68 * (1 - t);
-    },
-    onDispose() {
-      ribbonMat.dispose();
-    }
-  });
+  ribbonSlot.mesh.rotation.y = facingAngle + Math.PI / 2;
+  ribbonSlot.mesh.rotation.z = (Math.random() - 0.5) * 0.35;
+  ribbonSlot.mesh.scale.set(1, 1, 1);
+  ribbonSlot.mat.opacity = 0.68;
+  ribbonSlot.mesh.visible = true;
 
   const isGreenOrb = Math.random() < 0.62;
-  const orbMat = new THREE.SpriteMaterial({
-    map: vfxTextures.flashHalo || vfxTextures.flashSpark || undefined,
-    color: isGreenOrb ? 0x22ff68 : 0x1ec8ff,
-    transparent: true,
-    opacity: 0.72,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false
-  });
-  const orb = new THREE.Sprite(orbMat);
   const orbLat = (Math.random() - 0.5) * 44;
-  orb.position.set(
+  const startScale = isGreenOrb ? 54 : 42;
+  allocSparkleSlot(
     x + backX * 36 + sideX * orbLat,
     65 + Math.random() * 65,
-    z + backZ * 36 + sideZ * orbLat
+    z + backZ * 36 + sideZ * orbLat,
+    backX * 70,
+    18,
+    backZ * 70,
+    isGreenOrb ? 0x22ff68 : 0x1ec8ff,
+    startScale,
+    0.44,
+    1,
+    0.72
   );
-  const startScale = isGreenOrb ? 54 : 42;
-  orb.scale.setScalar(startScale);
-  scene.add(orb);
+}
 
-  transientVfx.push({
-    mesh: orb,
-    age: 0,
-    duration: 0.44,
-    update(dt: number) {
-      const t = this.age / this.duration;
-      orb.position.x += backX * 70 * dt;
-      orb.position.y += 18 * dt;
-      orb.position.z += backZ * 70 * dt;
-      orb.scale.setScalar(startScale * (1 - t * 0.45));
-      orbMat.opacity = 0.72 * Math.pow(1 - t, 1.3);
-    },
-    onDispose() {
-      orbMat.dispose();
+function updatePooledVfx(dt: number): void {
+  for (let i = 0; i < MAX_RING_BURSTS; i++) {
+    const r = ringBurstPool[i];
+    if (!r.active) continue;
+    r.age += dt;
+    if (r.age >= r.duration) {
+      r.active = false;
+      r.mesh.visible = false;
+    } else {
+      const t = r.age / r.duration;
+      const s = r.baseScale * (1 + (r.scaleRatio - 1) * (1 - Math.pow(1 - t, 2)));
+      r.mesh.scale.setScalar(s);
+      r.mat.opacity = 0.9 * (1 - t);
     }
-  });
+  }
+
+  for (let i = 0; i < moveIndicatorPool.length; i++) {
+    const m = moveIndicatorPool[i];
+    if (!m.active) continue;
+    m.age += dt;
+    if (m.age >= m.duration) {
+      m.active = false;
+      m.group.visible = false;
+    } else {
+      const t = m.age / m.duration;
+      const ease = 1 - Math.pow(1 - t, 2);
+      m.group.scale.setScalar(1.05 - 0.68 * ease);
+      m.mat.opacity = t < 0.45 ? 0.96 : 0.96 * (1 - (t - 0.45) / 0.55);
+    }
+  }
+
+  for (let i = 0; i < MAX_GHOST_RIBBONS; i++) {
+    const g = ghostRibbonPool[i];
+    if (!g.active) continue;
+    g.age += dt;
+    if (g.age >= g.duration) {
+      g.active = false;
+      g.mesh.visible = false;
+    } else {
+      const t = g.age / g.duration;
+      g.mesh.position.x += g.backX * 95 * dt;
+      g.mesh.position.z += g.backZ * 95 * dt;
+      g.mesh.scale.set(1 + t * 0.45, Math.max(0.2, 1 - t * 0.6), 1);
+      g.mat.opacity = 0.68 * (1 - t);
+    }
+  }
 }
 
 export function updateTransientVfx(dt: number): void {
   updateRockDebrisPool(dt);
+  updateSparklePool(dt);
+  updatePooledVfx(dt);
   for (let i = transientVfx.length - 1; i >= 0; i--) {
     const vfx = transientVfx[i];
     vfx.age += dt;
     if (vfx.age >= vfx.duration) {
       scene.remove(vfx.mesh);
       vfx.onDispose?.();
-      transientVfx.splice(i, 1);
+      const last = transientVfx.length - 1;
+      if (i !== last) {
+        transientVfx[i] = transientVfx[last];
+      }
+      transientVfx.pop();
     } else {
       vfx.update(dt);
     }
@@ -1211,6 +1512,8 @@ export function prewarmAllVfxShaders(): void {
   for (const tex of champTextureCache.values()) {
     renderer.initTexture(tex);
   }
+  syncSparkleMap();
+  ensureMoveIndicatorPool();
 
   const warmupGroup = new THREE.Group();
   warmupGroup.position.set(0, 5, 0);
@@ -1230,19 +1533,12 @@ export function prewarmAllVfxShaders(): void {
   const basicSolidRing = createVfxBasicMat({
     color: 0xffffff
   });
-  const spriteAdd = new THREE.SpriteMaterial({
-    map: vfxTextures.flashSpark || undefined,
-    transparent: true,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false
-  });
-  prewarmedVfxMats.push(basicNormal, basicAdd, basicAddSolid, basicSolidRing, spriteAdd);
+  prewarmedVfxMats.push(basicNormal, basicAdd, basicAddSolid, basicSolidRing, sparkleShaderMat);
 
   warmupGroup.add(new THREE.Mesh(sharedZoneDecalGeo, basicNormal));
   warmupGroup.add(new THREE.Mesh(sharedSmokeRayGeo, basicAdd));
   warmupGroup.add(new THREE.Mesh(sharedZoneFillGeo, basicAddSolid));
   warmupGroup.add(new THREE.Mesh(sharedRingBurstGeo, basicSolidRing));
-  warmupGroup.add(new THREE.Sprite(spriteAdd));
 
   for (const champ of CHAMPION_LIST) {
     const projTpl = getCachedProjectileTemplate(champ.id);
@@ -1274,13 +1570,16 @@ export function prewarmAllVfxShaders(): void {
   });
 
   const prevDebrisVis = debrisPoints.visible;
+  const prevSparkleVis = sparklePoints.visible;
   debrisPoints.visible = true;
+  sparklePoints.visible = true;
   scene.add(warmupGroup);
   renderer.compile(scene, camera);
   // Perform one micro draw pass so ANGLE/Metal also builds final GPU pipelines upfront
   renderer.render(scene, camera);
   scene.remove(warmupGroup);
   debrisPoints.visible = prevDebrisVis;
+  sparklePoints.visible = prevSparkleVis;
 }
 
 // ============================================================================

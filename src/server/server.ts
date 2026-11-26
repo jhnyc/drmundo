@@ -1,8 +1,9 @@
-import express, { Request, Response } from 'express';
+import express, { NextFunction, Request, Response } from 'express';
 import fs from 'fs';
 import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import zlib from 'zlib';
 import { WebSocketServer, WebSocket, RawData } from 'ws';
 import crypto from 'crypto';
 import {
@@ -60,10 +61,123 @@ const PROJECT_ROOT = resolveProjectRoot(__dirname);
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({
+  server,
+  perMessageDeflate: false,
+  maxPayload: 4096
+});
 
-app.use('/three', express.static(path.join(PROJECT_ROOT, 'node_modules/three')));
-app.use(express.static(path.join(PROJECT_ROOT, 'public')));
+const PUBLIC_ROOT = path.join(PROJECT_ROOT, 'public');
+const THREE_ROOT = path.join(PROJECT_ROOT, 'node_modules', 'three');
+
+const COMPRESSIBLE_MIME: Record<string, string> = {
+  '.js': 'application/javascript; charset=utf-8',
+  '.mjs': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.obj': 'text/plain; charset=utf-8',
+  '.svg': 'image/svg+xml; charset=utf-8'
+};
+
+interface CachedGzipAsset {
+  mtimeMs: number;
+  gzipped: Buffer;
+  contentType: string;
+}
+
+const gzipCache = new Map<string, CachedGzipAsset>();
+
+function getCacheControlForPublicPath(urlPath: string): string {
+  if (urlPath.startsWith('/assets/')) return 'public, max-age=86400';
+  return 'no-cache';
+}
+
+function tryServeGzipStatic(
+  req: Request,
+  res: Response,
+  rootDir: string,
+  relPath: string,
+  cacheControl: string
+): boolean {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  const acceptEncoding = req.headers['accept-encoding'];
+  if (typeof acceptEncoding !== 'string' || !acceptEncoding.includes('gzip')) return false;
+
+  const cleanRel = relPath.replace(/^\/+/, '');
+  const resolved = path.resolve(rootDir, cleanRel);
+  if (resolved !== rootDir && !resolved.startsWith(rootDir + path.sep)) return false;
+
+  const ext = path.extname(resolved).toLowerCase();
+  const contentType = COMPRESSIBLE_MIME[ext];
+  if (!contentType) return false;
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(resolved);
+    if (!stat.isFile()) return false;
+  } catch {
+    return false;
+  }
+
+  let cached = gzipCache.get(resolved);
+  if (!cached || cached.mtimeMs !== stat.mtimeMs) {
+    const raw = fs.readFileSync(resolved);
+    cached = {
+      mtimeMs: stat.mtimeMs,
+      gzipped: zlib.gzipSync(raw, { level: 6 }),
+      contentType
+    };
+    gzipCache.set(resolved, cached);
+  }
+
+  res.setHeader('Content-Type', cached.contentType);
+  res.setHeader('Content-Encoding', 'gzip');
+  res.setHeader('Vary', 'Accept-Encoding');
+  res.setHeader('Cache-Control', cacheControl);
+  res.setHeader('Content-Length', String(cached.gzipped.length));
+  if (req.method === 'HEAD') {
+    res.status(200).end();
+  } else {
+    res.status(200).send(cached.gzipped);
+  }
+  return true;
+}
+
+app.use('/three', (req: Request, res: Response, next: NextFunction) => {
+  if (tryServeGzipStatic(req, res, THREE_ROOT, req.path, 'public, max-age=604800, immutable')) {
+    return;
+  }
+  next();
+});
+app.use(
+  '/three',
+  express.static(THREE_ROOT, {
+    setHeaders: (res) => {
+      res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+    }
+  })
+);
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (req.path === '/healthz' || req.path.startsWith('/api/') || req.path.startsWith('/three/')) {
+    next();
+    return;
+  }
+  const relPath = req.path === '/' ? 'index.html' : req.path;
+  if (tryServeGzipStatic(req, res, PUBLIC_ROOT, relPath, getCacheControlForPublicPath(req.path))) {
+    return;
+  }
+  next();
+});
+app.use(
+  express.static(PUBLIC_ROOT, {
+    setHeaders: (res, filePath) => {
+      const rel = '/' + path.relative(PUBLIC_ROOT, filePath).replace(/\\/g, '/');
+      res.setHeader('Cache-Control', getCacheControlForPublicPath(rel));
+    }
+  })
+);
 
 const rooms = new Map<string, GameRoom>();
 const snapshotPath =
@@ -89,8 +203,12 @@ app.get('/api/rooms', (_req: Request, res: Response) => {
   res.json({ rooms: list });
 });
 
-app.get('*', (_req: Request, res: Response) => {
-  res.sendFile(path.join(PROJECT_ROOT, 'public/index.html'));
+app.get('*', (req: Request, res: Response) => {
+  if (tryServeGzipStatic(req, res, PUBLIC_ROOT, 'index.html', 'no-cache')) {
+    return;
+  }
+  res.setHeader('Cache-Control', 'no-cache');
+  res.sendFile(path.join(PUBLIC_ROOT, 'index.html'));
 });
 
 function generateRoomId(): string {
@@ -151,19 +269,33 @@ function broadcastToRoom(room: GameRoom, payload: ServerToClientMessage): void {
 }
 
 // ============================================================================
-// AUTHORITATIVE 60HZ GAME LOOP
+// AUTHORITATIVE 60HZ GAME LOOP (IDLE-AWARE)
 // ============================================================================
 let lastLagLogAt = 0;
-
 let tickCounter = 0;
-setInterval(() => {
+let tickIntervalId: ReturnType<typeof setInterval> | null = null;
+let persistenceDirty = false;
+
+function hasActiveSimulationRoom(): boolean {
+  for (const room of rooms.values()) {
+    if (room.clients.length > 0 && room.state !== 'lobby' && room.state !== 'gameover') {
+      return true;
+    }
+  }
+  return false;
+}
+
+function runSimulationTick(): void {
   tickCounter = (tickCounter + 1) % 2;
   const isSnapshotTick = tickCounter === 0;
   const tickStart = performance.now();
+  let steppedAny = false;
+
   for (const room of rooms.values()) {
     if (room.clients.length === 0) continue;
 
     if (room.state === 'round_end') {
+      steppedAny = true;
       room.roundEndTimer -= DT;
       if (room.roundEndTimer <= 0) {
         room.round += 1;
@@ -181,6 +313,7 @@ setInterval(() => {
       room.state === 'round_end' ||
       room.state === 'gameover'
     ) {
+      if (room.state !== 'gameover') steppedAny = true;
       stepRoomSimulation(room, DT, (finishedRoom) => {
         broadcastToRoom(finishedRoom, serializeRoomLobby(finishedRoom));
         trackEvent('match_completed', finishedRoom.id, {
@@ -212,12 +345,27 @@ setInterval(() => {
     }
   }
 
+  if (steppedAny) {
+    persistenceDirty = true;
+  }
+
+  if (!hasActiveSimulationRoom() && tickIntervalId !== null) {
+    clearInterval(tickIntervalId);
+    tickIntervalId = null;
+  }
+
   const tickMs = performance.now() - tickStart;
   if (tickMs > 25 && Date.now() - lastLagLogAt > 30_000) {
     lastLagLogAt = Date.now();
     trackEvent('tick_lag', 'server', { tickMs: Math.round(tickMs * 10) / 10, rooms: rooms.size });
   }
-}, 1000 / TICK_RATE);
+}
+
+function ensureTickLoopRunning(): void {
+  if (tickIntervalId === null && hasActiveSimulationRoom()) {
+    tickIntervalId = setInterval(runSimulationTick, 1000 / TICK_RATE);
+  }
+}
 
 // ============================================================================
 // WEBSOCKET CONNECTION & ROOM SIGNALING
@@ -237,6 +385,7 @@ function leaveCurrentRoom(client: ConnectedClient): void {
 
   if (room.clients.length === 0) {
     rooms.delete(room.id);
+    persistenceDirty = true;
     return;
   }
 
@@ -261,10 +410,14 @@ function leaveCurrentRoom(client: ConnectedClient): void {
   room.state = 'lobby';
   room.projectiles = [];
   room.groundZones = [];
+  persistenceDirty = true;
   broadcastToRoom(room, serializeRoomLobby(room));
 }
 
 wss.on('connection', (ws: WebSocket) => {
+  (ws as unknown as { _socket?: { setNoDelay?: (noDelay?: boolean) => void } })._socket?.setNoDelay?.(
+    true
+  );
   const client: ConnectedClient = {
     id: crypto.randomUUID(),
     ws,
@@ -366,6 +519,7 @@ wss.on('connection', (ws: WebSocket) => {
       client.roomId = roomId;
       client.slot = 0;
       rooms.set(roomId, room);
+      persistenceDirty = true;
 
       trackEvent('room_created', client.id, {
         roomId,
@@ -446,7 +600,9 @@ wss.on('connection', (ws: WebSocket) => {
         broadcastToRoom(room, serializeRoomLobby(room));
         if (room.state !== 'lobby') {
           sendClientMessage(ws, buildStateSnapshot(room));
+          ensureTickLoopRunning();
         }
+        persistenceDirty = true;
         trackEvent('room_joined', client.id, { roomId, slot: reclaimSlot, reclaimed: true });
         return;
       }
@@ -481,6 +637,7 @@ wss.on('connection', (ws: WebSocket) => {
       client.roomId = roomId;
       client.slot = assignedSlot;
       room.clients.push(client);
+      persistenceDirty = true;
 
       sendClientMessage(ws, {
         type: 'joined_room',
@@ -507,6 +664,7 @@ wss.on('connection', (ws: WebSocket) => {
       for (const p of room.players) {
         if (p) setPlayerChampion(p, nextChampionId);
       }
+      persistenceDirty = true;
       broadcastToRoom(room, serializeRoomLobby(room));
       return;
     }
@@ -519,6 +677,7 @@ wss.on('connection', (ws: WebSocket) => {
         getSpellCooldown(player.spells[0], fastCd),
         getSpellCooldown(player.spells[1], fastCd)
       ];
+      persistenceDirty = true;
       broadcastToRoom(room, serializeRoomLobby(room));
       return;
     }
@@ -526,6 +685,7 @@ wss.on('connection', (ws: WebSocket) => {
     if (msg.type === 'update_name') {
       if (msg.name && typeof msg.name === 'string') {
         player.name = msg.name.trim().slice(0, 20) || player.name;
+        persistenceDirty = true;
         broadcastToRoom(room, serializeRoomLobby(room));
       }
       return;
@@ -539,6 +699,7 @@ wss.on('connection', (ws: WebSocket) => {
       room.players[1] = room.botEnabled
         ? createPlayerState(1, botChamp.defaultBotName, ['flash', 'ghost'], true, botChamp.id)
         : null;
+      persistenceDirty = true;
       broadcastToRoom(room, serializeRoomLobby(room));
       return;
     }
@@ -551,6 +712,7 @@ wss.on('connection', (ws: WebSocket) => {
         if (msg.cooldownMode === 'fast' || msg.cooldownMode === 'standard') {
           room.settings.cooldownMode = msg.cooldownMode;
         }
+        persistenceDirty = true;
         broadcastToRoom(room, serializeRoomLobby(room));
       }
       return;
@@ -558,6 +720,7 @@ wss.on('connection', (ws: WebSocket) => {
 
     if (msg.type === 'set_ready') {
       player.ready = Boolean(msg.ready);
+      persistenceDirty = true;
       broadcastToRoom(room, serializeRoomLobby(room));
       return;
     }
@@ -584,6 +747,8 @@ wss.on('connection', (ws: WebSocket) => {
       room.countdownTimer = 3.0;
       room.lastBroadcastCountdownSec = -1;
       room.events.push({ type: 'round_countdown', round: 1 });
+      persistenceDirty = true;
+      ensureTickLoopRunning();
       broadcastToRoom(room, serializeRoomLobby(room));
       trackEvent('match_started', room.id, {
         roomId: room.id,
@@ -608,6 +773,7 @@ wss.on('connection', (ws: WebSocket) => {
       for (const p of room.players) {
         if (p && !p.isBot) p.ready = false;
       }
+      persistenceDirty = true;
       broadcastToRoom(room, serializeRoomLobby(room));
       return;
     }
@@ -672,12 +838,16 @@ wss.on('connection', (ws: WebSocket) => {
 });
 
 setInterval(() => {
-  void persistence.save(rooms);
   const now = Date.now();
   for (const [id, room] of rooms.entries()) {
     if (room.clients.length === 0 && room.restoredAt && now - room.restoredAt > RESTORED_ROOM_TTL_MS) {
       rooms.delete(id);
+      persistenceDirty = true;
     }
+  }
+  if (persistenceDirty) {
+    persistenceDirty = false;
+    void persistence.save(rooms);
   }
 }, 2000);
 

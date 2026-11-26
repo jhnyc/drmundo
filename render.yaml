@@ -1,8 +1,7 @@
 services:
   - type: web
     name: baron-pit-drmundo-1v1
-    runtime: node
+    runtime: docker
     plan: free
-    buildCommand: npm install --include=dev && npm run build
-    startCommand: node dist/server.js
+    dockerfilePath: ./Dockerfile
     healthCheckPath: /healthz
